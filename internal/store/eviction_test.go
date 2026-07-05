@@ -143,3 +143,76 @@ func TestLRU_StampsIncrease(t *testing.T) {
 		t.Errorf("after access, a (%d) should outrank b (%d)", a.Load(), b.Load())
 	}
 }
+
+// TestEviction_LFUEvictsLeastFrequentlyUsed: every existing key is accessed at
+// least once, so a brand-new key (which starts at the base count) is the unique
+// least-frequently-used entry — and the one evicted. cap = evictionSampleSize-1
+// so the overflow insert samples every entry (exact eviction).
+func TestEviction_LFUEvictsLeastFrequentlyUsed(t *testing.T) {
+	capacity := evictionSampleSize - 1
+	m := New(WithMaxEntries(capacity), WithPolicy(NewLFU))
+
+	for i := 0; i < capacity; i++ {
+		k := "k" + strconv.Itoa(i)
+		if err := m.Set(k, []byte("v")); err != nil {
+			t.Fatal(err)
+		}
+		m.Get(k) // one access each → every existing key is above the base count
+	}
+	// New key: base count, never accessed → the least frequently used.
+	if err := m.Set("kNew", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := m.Get("kNew"); ok {
+		t.Error("kNew (least frequently used) should have been evicted")
+	}
+	for i := 0; i < capacity; i++ {
+		if _, ok := m.Get("k" + strconv.Itoa(i)); !ok {
+			t.Errorf("k%d (accessed) should have survived", i)
+		}
+	}
+}
+
+// TestEviction_LFUProtectsHotKey: a frequently-accessed key survives a long churn
+// of cold keys, because its high count keeps it off the eviction radar. cap =
+// evictionSampleSize-1, so every eviction samples the whole store (hot included)
+// and hot is never the smallest count.
+func TestEviction_LFUProtectsHotKey(t *testing.T) {
+	capacity := evictionSampleSize - 1
+	m := New(WithMaxEntries(capacity), WithPolicy(NewLFU))
+
+	if err := m.Set("hot", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100; i++ {
+		m.Get("hot") // make it very frequently used
+	}
+	// Churn many cold keys through the store.
+	for i := 0; i < 200; i++ {
+		if err := m.Set("cold"+strconv.Itoa(i), []byte("v")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, ok := m.Get("hot"); !ok {
+		t.Error("hot key should have survived the churn (LFU protects frequently-used keys)")
+	}
+}
+
+// TestLFU_CountsIncrease: recordInsert seeds a nonzero base count, and
+// recordAccess increments it.
+func TestLFU_CountsIncrease(t *testing.T) {
+	p := NewLFU()
+	var h atomic.Uint64
+
+	p.recordInsert(&h)
+	base := h.Load()
+	if base == 0 {
+		t.Error("recordInsert should seed a nonzero base count")
+	}
+	p.recordAccess(&h)
+	if h.Load() != base+1 {
+		t.Errorf("after one access, count = %d, want %d", h.Load(), base+1)
+	}
+}

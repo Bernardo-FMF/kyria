@@ -96,10 +96,12 @@ var _ Store = (*MapStore)(nil)
 // Get returns the value stored for key. The returned slice aliases internal
 // storage and must not be modified by the caller.
 //
-// Expiry is lazy: an expired entry is reported absent but is not removed here.
-// Get is a read — under ShardedStore it holds only a read lock — so deleting
-// would write the map under that lock and race. Reclamation happens on a later
-// overwriting Set (or, eventually, the active janitor).
+// Under ShardedStore, Get holds only a read lock, so it must not write the map.
+// That governs two things here: expiry is lazy (an expired entry is reported
+// absent but not deleted — reclamation is left to a later Set or the janitor),
+// and the eviction policy records the access via an atomic hint rather than
+// touching the map. Concurrent readers may update atomics; they must not mutate
+// the map.
 func (m *MapStore) Get(key string) ([]byte, bool) {
 	e, ok := m.data[key]
 	if !ok {

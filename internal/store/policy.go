@@ -33,3 +33,26 @@ func NewLRU() Policy {
 
 func (p *lru) recordAccess(hint *atomic.Uint64) { hint.Store(p.clock.Add(1)) }
 func (p *lru) recordInsert(hint *atomic.Uint64) { hint.Store(p.clock.Add(1)) }
+
+// lfuBaseCount is the count a new entry starts at (Redis's LFU_INIT_VAL), so a
+// fresh key is not pinned at zero.
+const lfuBaseCount = 5
+
+// lfu is an approximate LFU (least-frequently-used) policy: the hint is an access
+// count that grows on every access, so the smallest hint is the least-frequently-
+// used entry — the one the store evicts. Unlike lru it keeps no per-policy state.
+//
+// Two known limitations, both addressed by TinyLFU: a new entry starts at the
+// base count (the floor), so it is the immediate eviction candidate — new keys
+// struggle to get in (cold start); and counts only ever grow, so a key that was
+// hot long ago never ages out.
+type lfu struct {
+}
+
+// NewLFU returns a fresh LFU policy. It is the factory passed to WithPolicy.
+func NewLFU() Policy {
+	return &lfu{}
+}
+
+func (p *lfu) recordAccess(hint *atomic.Uint64) { hint.Add(1) }
+func (p *lfu) recordInsert(hint *atomic.Uint64) { hint.Store(lfuBaseCount) }

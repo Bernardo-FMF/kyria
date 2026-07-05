@@ -4,6 +4,7 @@ package store
 
 import (
 	"errors"
+	"time"
 )
 
 // Default size limits, in bytes. They bound how much memory a single entry may
@@ -21,6 +22,9 @@ var (
 	ErrKeyTooLarge = errors.New("store: key exceeds maximum size")
 	// ErrValueTooLarge is returned when the value exceeds the configured maximum.
 	ErrValueTooLarge = errors.New("store: value exceeds maximum size")
+	// ErrInvalidTTL is returned by SetWithTTL when the supplied ttl is not
+	// positive. Use Set for entries that should never expire.
+	ErrInvalidTTL = errors.New("store: ttl must be positive")
 )
 
 // Store is kyria's core key-value abstraction, mapping string keys to
@@ -28,9 +32,13 @@ var (
 type Store interface {
 	// Get returns the value stored for key and whether it was present.
 	Get(key string) (value []byte, found bool)
-	// Set stores value under key, returning a sentinel error if key or value
-	// violates the configured size limits.
+	// Set stores value under key with no expiry, returning a sentinel error if
+	// key or value violates the configured size limits.
 	Set(key string, value []byte) error
+	// SetWithTTL stores value under key with a time-to-live: Get treats the
+	// entry as absent once ttl has elapsed. ttl must be positive, otherwise
+	// SetWithTTL returns ErrInvalidTTL. Size limits apply as with Set.
+	SetWithTTL(key string, value []byte, ttl time.Duration) error
 	// Delete removes key, reporting whether it had been present.
 	Delete(key string) (deleted bool)
 	// Size reports the number of entries currently stored.

@@ -3,6 +3,7 @@ package store
 import (
 	"hash/maphash"
 	"sync"
+	"time"
 )
 
 // shard is one partition of a ShardedStore: a MapStore guarded by its own
@@ -86,6 +87,16 @@ func (s *ShardedStore) Set(key string, value []byte) error {
 	defer shard.mu.Unlock()
 
 	return shard.store.Set(key, value)
+}
+
+// SetWithTTL stores value under key with a time-to-live, returning ErrInvalidTTL
+// if ttl is not positive, or a size-limit sentinel error as Set does.
+func (s *ShardedStore) SetWithTTL(key string, value []byte, ttl time.Duration) error {
+	shard := s.shardFor(key)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+
+	return shard.store.SetWithTTL(key, value, ttl)
 }
 
 // Delete removes key and reports whether it had been present.

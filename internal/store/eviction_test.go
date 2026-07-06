@@ -224,3 +224,92 @@ func TestLFU_CountsIncrease(t *testing.T) {
 		t.Errorf("after one access, count = %d, want %d", h.Load(), base+1)
 	}
 }
+
+// TestTinyLFU_ScoreReflectsFrequency: an unseen key scores 0; recording hits
+// raises the score. TinyLFU keys off the key and ignores the per-entry hint, so
+// we pass nil for it.
+func TestTinyLFU_ScoreReflectsFrequency(t *testing.T) {
+	p := NewTinyLFU(128)()
+
+	if got := p.score("x", nil); got != 0 {
+		t.Errorf("score of unseen key = %d, want 0", got)
+	}
+
+	p.recordInsert("x", nil)
+	p.recordAccess("x", nil)
+	p.recordAccess("x", nil)
+	if got := p.score("x", nil); got < 3 {
+		t.Errorf("score after 3 records = %d, want >= 3 (never undercounts)", got)
+	}
+}
+
+// TestTinyLFU_Admit: the newcomer is admitted only if it's STRICTLY more frequent
+// than the victim it would displace; ties favor the incumbent.
+func TestTinyLFU_Admit(t *testing.T) {
+	p := NewTinyLFU(128)()
+
+	tests := []struct {
+		candidate, victim uint64
+		want              bool
+	}{
+		{candidate: 5, victim: 3, want: true},
+		{candidate: 3, victim: 5, want: false},
+		{candidate: 3, victim: 3, want: false},
+	}
+	for _, tc := range tests {
+		if got := p.admit(tc.candidate, tc.victim); got != tc.want {
+			t.Errorf("admit(%d, %d) = %v, want %v", tc.candidate, tc.victim, got, tc.want)
+		}
+	}
+}
+
+// TestEviction_TinyLFUAdmission: TinyLFU rejects a cold newcomer that can't beat
+// the weakest incumbent, then admits that same key once repeated requests push its
+// estimated frequency above the victim's. The sketch is sized generously so, for
+// this handful of keys, its estimates are effectively exact.
+func TestEviction_TinyLFUAdmission(t *testing.T) {
+	const capacity = evictionSampleSize - 1 // 4, so every incumbent is sampled
+	m := New(WithMaxEntries(capacity), WithPolicy(NewTinyLFU(1024)))
+
+	// k0 is the weak victim (inserted, never accessed → frequency 1). k1..k3 are
+	// hammered so they're clearly more frequent than any newcomer.
+	for i := 0; i < capacity; i++ {
+		if _, err := m.Set("k"+strconv.Itoa(i), []byte("v")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 1; i < capacity; i++ {
+		for r := 0; r < 20; r++ {
+			m.Get("k" + strconv.Itoa(i))
+		}
+	}
+
+	// First request for "new": frequency 1 does not beat k0's 1 (ties go to the
+	// incumbent), so it's rejected and not stored.
+	admitted, err := m.Set("new", []byte("v"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admitted {
+		t.Error("first Set(new) should have been rejected (does not beat the victim)")
+	}
+	if _, ok := m.Get("new"); ok {
+		t.Error("new should not be stored after rejection")
+	}
+
+	// Second request bumps new's frequency to 2, which now beats k0's 1 → admitted,
+	// and k0 (the least-frequent incumbent) is the one evicted.
+	admitted, err = m.Set("new", []byte("v"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !admitted {
+		t.Error("second Set(new) should have been admitted (now beats the victim)")
+	}
+	if _, ok := m.Get("new"); !ok {
+		t.Error("new should be stored after admission")
+	}
+	if _, ok := m.Get("k0"); ok {
+		t.Error("k0 (least frequent) should have been evicted")
+	}
+}

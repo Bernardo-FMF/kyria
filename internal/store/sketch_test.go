@@ -8,7 +8,7 @@ import "testing"
 
 // TestSketch_EmptyIsZero: a fresh sketch has seen nothing, so every estimate is 0.
 func TestSketch_EmptyIsZero(t *testing.T) {
-	s := newCountMinSketch(100)
+	s := NewCountMinSketch(100)
 	if got := s.estimate("anything"); got != 0 {
 		t.Errorf("estimate on empty sketch = %d, want 0", got)
 	}
@@ -18,7 +18,7 @@ func TestSketch_EmptyIsZero(t *testing.T) {
 // cap), the estimate is at least k. Collisions may push it higher, but a count-min
 // sketch never reports less than the truth.
 func TestSketch_NeverUndercounts(t *testing.T) {
-	s := newCountMinSketch(100)
+	s := NewCountMinSketch(100)
 	const k = 10
 	for i := 0; i < k; i++ {
 		s.add("x")
@@ -31,7 +31,7 @@ func TestSketch_NeverUndercounts(t *testing.T) {
 // TestSketch_SaturatesAtMax: counters cap at counterMax, so a heavily-added key
 // estimates exactly counterMax and never overflows.
 func TestSketch_SaturatesAtMax(t *testing.T) {
-	s := newCountMinSketch(100)
+	s := NewCountMinSketch(100)
 	for i := 0; i < 100; i++ {
 		s.add("x")
 	}
@@ -44,7 +44,7 @@ func TestSketch_SaturatesAtMax(t *testing.T) {
 // cells are exactly counterMax, independent of collisions), reset halves every
 // cell — the estimate becomes counterMax/2 exactly. This is aging in miniature.
 func TestSketch_ResetHalvesSaturatedCounters(t *testing.T) {
-	s := newCountMinSketch(100)
+	s := NewCountMinSketch(100)
 	for i := 0; i < 2*counterMax; i++ {
 		s.add("x")
 	}
@@ -63,7 +63,7 @@ func TestSketch_ResetHalvesSaturatedCounters(t *testing.T) {
 // sampleSize. Saturate a key (cells at counterMax), then let the increments cross
 // the threshold; the automatic reset halves it to counterMax/2.
 func TestSketch_AutoResetsAfterSampleSize(t *testing.T) {
-	s := newCountMinSketch(10) // sampleSize is well above counterMax, so "x" saturates first
+	s := NewCountMinSketch(10) // sampleSize is well above counterMax, so "x" saturates first
 	for i := 0; i < s.sampleSize; i++ {
 		s.add("x")
 	}

@@ -32,10 +32,10 @@ type countMinSketch struct {
 	seed       maphash.Seed // one seed; each row's column is derived from it by double hashing
 }
 
-// newCountMinSketch returns a sketch sized for roughly capacity distinct keys.
+// NewCountMinSketch returns a sketch sized for roughly capacity distinct keys.
 // width is capacity rounded up to a power of two — about one column per expected
 // key keeps collisions low without wasting memory.
-func newCountMinSketch(capacity int) *countMinSketch {
+func NewCountMinSketch(capacity int) *countMinSketch {
 	if capacity < 1 {
 		capacity = 1
 	}

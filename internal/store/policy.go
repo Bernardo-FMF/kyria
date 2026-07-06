@@ -72,3 +72,39 @@ func (p *lfu) score(key string, hint *atomic.Uint64) uint64 { return hint.Load()
 // admit always accepts: plain LFU has no admission filter, so a new key always
 // displaces the least-frequently-used victim.
 func (p *lfu) admit(candidateScore, victimScore uint64) bool { return true }
+
+// tinyLFU is an admission policy. Its frequency numbers come from a shared
+// count-min sketch keyed by the key — it ignores the per-entry hint the other
+// policies use. Because the sketch ages itself, old popularity fades (unlike
+// lfu), and admit uses its estimates to reject a newcomer that isn't worth
+// evicting an incumbent for (fixing lfu's cold-start problem).
+type tinyLFU struct {
+	sketch *countMinSketch
+}
+
+// NewTinyLFU returns a factory for TinyLFU policies whose sketch is sized for
+// capacity keys. Unlike NewLRU/NewLFU (which are themselves a func() Policy),
+// TinyLFU needs that capacity — so NewTinyLFU takes it and returns the
+// func() Policy. WithPolicy calls that once per shard, giving each shard its own
+// sketch. Usage: WithPolicy(NewTinyLFU(n)).
+func NewTinyLFU(capacity int) func() Policy {
+	return func() Policy {
+		return &tinyLFU{
+			NewCountMinSketch(capacity),
+		}
+	}
+}
+
+func (p *tinyLFU) recordAccess(key string, hint *atomic.Uint64) { p.sketch.add(key) }
+func (p *tinyLFU) recordInsert(key string, hint *atomic.Uint64) { p.sketch.add(key) }
+func (p *tinyLFU) score(key string, hint *atomic.Uint64) uint64 {
+	return uint64(p.sketch.estimate(key))
+}
+
+// admit is the admission filter: it accepts the newcomer only if the sketch
+// estimates it strictly more frequent than the victim it would displace. Ties
+// favor the incumbent, so a newcomer must genuinely beat the weakest resident to
+// get in — which is what lets TinyLFU shrug off scans and one-hit-wonders.
+func (p *tinyLFU) admit(candidateScore, victimScore uint64) bool {
+	return candidateScore > victimScore
+}

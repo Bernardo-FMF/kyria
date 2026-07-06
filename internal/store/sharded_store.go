@@ -79,9 +79,9 @@ func (s *ShardedStore) Get(key string) ([]byte, bool) {
 	return shard.store.Get(key)
 }
 
-// Set stores value under key, returning a sentinel error if key or value
-// violates the configured size limits.
-func (s *ShardedStore) Set(key string, value []byte) error {
+// Set stores value under key. It reports whether the entry was admitted and
+// returns a sentinel error if key or value violates the configured size limits.
+func (s *ShardedStore) Set(key string, value []byte) (bool, error) {
 	shard := s.shardFor(key)
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
@@ -90,8 +90,9 @@ func (s *ShardedStore) Set(key string, value []byte) error {
 }
 
 // SetWithTTL stores value under key with a time-to-live, returning ErrInvalidTTL
-// if ttl is not positive, or a size-limit sentinel error as Set does.
-func (s *ShardedStore) SetWithTTL(key string, value []byte, ttl time.Duration) error {
+// if ttl is not positive, or a size-limit sentinel error as Set does. Like Set,
+// it reports whether the entry was admitted.
+func (s *ShardedStore) SetWithTTL(key string, value []byte, ttl time.Duration) (bool, error) {
 	shard := s.shardFor(key)
 	shard.mu.Lock()
 	defer shard.mu.Unlock()

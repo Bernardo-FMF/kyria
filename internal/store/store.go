@@ -32,13 +32,16 @@ var (
 type Store interface {
 	// Get returns the value stored for key and whether it was present.
 	Get(key string) (value []byte, found bool)
-	// Set stores value under key with no expiry, returning a sentinel error if
-	// key or value violates the configured size limits.
-	Set(key string, value []byte) error
+	// Set stores value under key with no expiry. It reports whether the entry
+	// was admitted — an eviction policy may reject a new key when the store is
+	// full — and returns a sentinel error if key or value violates the
+	// configured size limits.
+	Set(key string, value []byte) (admitted bool, err error)
 	// SetWithTTL stores value under key with a time-to-live: Get treats the
 	// entry as absent once ttl has elapsed. ttl must be positive, otherwise
-	// SetWithTTL returns ErrInvalidTTL. Size limits apply as with Set.
-	SetWithTTL(key string, value []byte, ttl time.Duration) error
+	// SetWithTTL returns ErrInvalidTTL. Like Set, it reports whether the entry
+	// was admitted. Size limits apply as with Set.
+	SetWithTTL(key string, value []byte, ttl time.Duration) (admitted bool, err error)
 	// Delete removes key, reporting whether it had been present.
 	Delete(key string) (deleted bool)
 	// Size reports the number of entries currently stored.

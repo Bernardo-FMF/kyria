@@ -48,7 +48,7 @@ func TestReapExpired_ShardedStore(t *testing.T) {
 		k := "exp" + strconv.Itoa(i)
 		s.shardFor(k).store.data[k] = entry{value: []byte("v"), expiresAt: now.Add(-time.Hour)}
 	}
-	if err := s.Set("live", []byte("v")); err != nil {
+	if _, err := s.Set("live", []byte("v")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -132,7 +132,7 @@ func TestJanitor_ReclaimsExpiredEntries(t *testing.T) {
 		k := "exp" + strconv.Itoa(i)
 		s.shardFor(k).store.data[k] = entry{value: []byte("v"), expiresAt: time.Now().Add(-time.Hour)}
 	}
-	if err := s.Set("live", []byte("v")); err != nil {
+	if _, err := s.Set("live", []byte("v")); err != nil {
 		t.Fatal(err)
 	}
 	if s.Size() != 11 {

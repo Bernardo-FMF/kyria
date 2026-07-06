@@ -20,7 +20,7 @@ func TestMapStore_SetAndGet(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := New()
-			if err := s.Set(tt.key, tt.value); err != nil {
+			if _, err := s.Set(tt.key, tt.value); err != nil {
 				t.Fatalf("Set(%q) returned unexpected error: %v", tt.key, err)
 			}
 
@@ -100,7 +100,7 @@ func TestMapStore_Set_validation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := New(tt.opts...)
-			err := s.Set(tt.key, tt.value)
+			_, err := s.Set(tt.key, tt.value)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("Set error = %v, want %v", err, tt.wantErr)
 			}
@@ -162,7 +162,7 @@ func TestMapStore_Set_defensiveCopy(t *testing.T) {
 // with t.Helper() makes failure messages point at the calling line, not here.
 func mustSet(t *testing.T, s *MapStore, key string, value []byte) {
 	t.Helper()
-	if err := s.Set(key, value); err != nil {
+	if _, err := s.Set(key, value); err != nil {
 		t.Fatalf("Set(%q) unexpected error: %v", key, err)
 	}
 }

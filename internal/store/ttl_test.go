@@ -43,7 +43,7 @@ func TestTTL_SetWithTTLStoresExpiry(t *testing.T) {
 	const ttl = time.Minute
 
 	before := time.Now()
-	if err := m.SetWithTTL("k", []byte("v"), ttl); err != nil {
+	if _, err := m.SetWithTTL("k", []byte("v"), ttl); err != nil {
 		t.Fatalf("SetWithTTL: %v", err)
 	}
 	after := time.Now()
@@ -78,7 +78,7 @@ func TestTTL_GetHidesExpired(t *testing.T) {
 	}
 
 	// Overwriting with a plain Set revives the key with no expiry.
-	if err := m.Set("k", []byte("fresh")); err != nil {
+	if _, err := m.Set("k", []byte("fresh")); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	if got, ok := m.Get("k"); !ok || !bytes.Equal(got, []byte("fresh")) {
@@ -90,7 +90,7 @@ func TestTTL_GetHidesExpired(t *testing.T) {
 // zero expiresAt).
 func TestTTL_SetNeverExpires(t *testing.T) {
 	m := New()
-	if err := m.Set("k", []byte("v")); err != nil {
+	if _, err := m.Set("k", []byte("v")); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	e, ok := m.data["k"]
@@ -107,7 +107,7 @@ func TestTTL_SetNeverExpires(t *testing.T) {
 func TestTTL_InvalidTTL(t *testing.T) {
 	m := New()
 	for _, ttl := range []time.Duration{0, -time.Second} {
-		if err := m.SetWithTTL("k", []byte("v"), ttl); !errors.Is(err, ErrInvalidTTL) {
+		if _, err := m.SetWithTTL("k", []byte("v"), ttl); !errors.Is(err, ErrInvalidTTL) {
 			t.Errorf("SetWithTTL(ttl=%v) error = %v, want ErrInvalidTTL", ttl, err)
 		}
 	}
@@ -122,7 +122,7 @@ func TestTTL_InvalidTTL(t *testing.T) {
 func TestTTL_ShardedStore(t *testing.T) {
 	s := NewSharded(8)
 
-	if err := s.SetWithTTL("live", []byte("v"), time.Minute); err != nil {
+	if _, err := s.SetWithTTL("live", []byte("v"), time.Minute); err != nil {
 		t.Fatalf("SetWithTTL: %v", err)
 	}
 	if _, ok := s.Get("live"); !ok {
@@ -156,7 +156,7 @@ func TestTTL_ShardedStoreConcurrent(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < opsPerG; i++ {
 				key := "key" + strconv.Itoa((g+i)%keySpace)
-				if err := s.SetWithTTL(key, []byte("v"), time.Minute); err != nil {
+				if _, err := s.SetWithTTL(key, []byte("v"), time.Minute); err != nil {
 					t.Errorf("SetWithTTL: %v", err)
 					return
 				}

@@ -2,19 +2,25 @@ package store
 
 import "sync/atomic"
 
-// Policy is a pluggable eviction strategy. It keeps an eviction hint on each
-// entry — a single number, where "lower is evicted first" — that it updates on
-// access and insert. When a shard is over capacity the store samples a few
-// entries and drops the one with the smallest hint (MapStore.sampleVictim), so
-// there is no global ordering to maintain: eviction is approximate and reads
-// never do list surgery.
+// Policy is a pluggable eviction strategy. Each entry carries an atomic hint the
+// policy maintains; score turns that (and/or the key) into an eviction priority,
+// and the store evicts the lowest score among a small random sample
+// (MapStore.sampleVictim). admit then decides whether a newcomer is worth
+// displacing that victim, or should be rejected instead.
 //
 // recordAccess is called from Get under a read lock, possibly concurrently for
-// the same entry, so it must touch only the atomic hint — nothing else. That one
+// the same entry, so it must touch only atomic state — nothing else. That one
 // constraint is what keeps reads lock-free.
 type Policy interface {
-	recordAccess(hint *atomic.Uint64) // called from Get, under a read lock
-	recordInsert(hint *atomic.Uint64) // called from set, under the write lock
+	// recordAccess notes a read of key; recordInsert notes a write.
+	recordAccess(key string, hint *atomic.Uint64)
+	recordInsert(key string, hint *atomic.Uint64)
+	// score returns an entry's eviction priority; the store evicts the lowest.
+	score(key string, hint *atomic.Uint64) uint64
+	// admit decides whether a newcomer (candidateScore) should displace the
+	// weakest sampled incumbent (victimScore): true evicts the victim, false
+	// rejects the newcomer.
+	admit(candidateScore, victimScore uint64) bool
 }
 
 // lru is an approximate LRU policy. It stamps each accessed or inserted entry
@@ -31,8 +37,13 @@ func NewLRU() Policy {
 	return &lru{}
 }
 
-func (p *lru) recordAccess(hint *atomic.Uint64) { hint.Store(p.clock.Add(1)) }
-func (p *lru) recordInsert(hint *atomic.Uint64) { hint.Store(p.clock.Add(1)) }
+func (p *lru) recordAccess(key string, hint *atomic.Uint64) { hint.Store(p.clock.Add(1)) }
+func (p *lru) recordInsert(key string, hint *atomic.Uint64) { hint.Store(p.clock.Add(1)) }
+func (p *lru) score(key string, hint *atomic.Uint64) uint64 { return hint.Load() }
+
+// admit always accepts: plain LRU has no admission filter, so a new key always
+// displaces the least-recently-used victim.
+func (p *lru) admit(candidateScore, victimScore uint64) bool { return true }
 
 // lfuBaseCount is the count a new entry starts at (Redis's LFU_INIT_VAL), so a
 // fresh key is not pinned at zero.
@@ -54,5 +65,10 @@ func NewLFU() Policy {
 	return &lfu{}
 }
 
-func (p *lfu) recordAccess(hint *atomic.Uint64) { hint.Add(1) }
-func (p *lfu) recordInsert(hint *atomic.Uint64) { hint.Store(lfuBaseCount) }
+func (p *lfu) recordAccess(key string, hint *atomic.Uint64) { hint.Add(1) }
+func (p *lfu) recordInsert(key string, hint *atomic.Uint64) { hint.Store(lfuBaseCount) }
+func (p *lfu) score(key string, hint *atomic.Uint64) uint64 { return hint.Load() }
+
+// admit always accepts: plain LFU has no admission filter, so a new key always
+// displaces the least-frequently-used victim.
+func (p *lfu) admit(candidateScore, victimScore uint64) bool { return true }

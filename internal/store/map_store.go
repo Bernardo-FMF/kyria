@@ -110,42 +110,44 @@ func (m *MapStore) Get(key string) ([]byte, bool) {
 	if e.expired(time.Now()) {
 		return nil, false
 	}
-	// Record the read for the eviction policy. recordAccess only touches the
-	// atomic hint, so it is safe here under the read lock.
+	// Record the read for the eviction policy. recordAccess only touches atomic
+	// state, so it is safe here under the read lock.
 	if m.policy != nil {
-		m.policy.recordAccess(e.hint)
+		m.policy.recordAccess(key, e.hint)
 	}
 	return e.value, true
 }
 
-// Set stores a private copy of value under key with no expiry. It returns a
-// sentinel error on any size-limit violation.
-func (m *MapStore) Set(key string, value []byte) error {
+// Set stores a private copy of value under key with no expiry. It reports whether
+// the entry was admitted (an eviction policy may reject a new key when the store
+// is full) and returns a sentinel error on any size-limit violation.
+func (m *MapStore) Set(key string, value []byte) (bool, error) {
 	return m.set(key, value, time.Time{})
 }
 
 // SetWithTTL stores a private copy of value under key with a time-to-live: Get
 // treats the entry as absent once ttl has elapsed. ttl must be positive,
 // otherwise SetWithTTL returns ErrInvalidTTL. Size limits apply as with Set.
-func (m *MapStore) SetWithTTL(key string, value []byte, ttl time.Duration) error {
+func (m *MapStore) SetWithTTL(key string, value []byte, ttl time.Duration) (bool, error) {
 	if ttl <= 0 {
-		return ErrInvalidTTL
+		return false, ErrInvalidTTL
 	}
 	return m.set(key, value, time.Now().Add(ttl))
 }
 
 // set validates key and value against the configured limits, then stores a
-// private copy of value with the given expiry. It is the shared implementation
-// behind Set (a zero expiresAt) and SetWithTTL (now + ttl).
-func (m *MapStore) set(key string, value []byte, expiresAt time.Time) error {
+// private copy of value with the given expiry. It reports whether the entry was
+// admitted, and is the shared implementation behind Set (a zero expiresAt) and
+// SetWithTTL (now + ttl).
+func (m *MapStore) set(key string, value []byte, expiresAt time.Time) (bool, error) {
 	if len(key) == 0 {
-		return ErrEmptyKey
+		return false, ErrEmptyKey
 	}
 	if len(key) > m.maxKeySize {
-		return ErrKeyTooLarge
+		return false, ErrKeyTooLarge
 	}
 	if len(value) > m.maxValueSize {
-		return ErrValueTooLarge
+		return false, ErrValueTooLarge
 	}
 
 	valueCopy := make([]byte, len(value))
@@ -158,52 +160,83 @@ func (m *MapStore) set(key string, value []byte, expiresAt time.Time) error {
 	_, existed := m.data[key]
 	m.data[key] = e
 
-	if m.policy != nil {
-		m.policy.recordInsert(e.hint)
-		if !existed {
-			// Only a new key grows the store, so only a new key can overflow the cap.
-			m.evictIfNeeded()
-		}
+	if m.policy == nil {
+		return true, nil
 	}
-
-	return nil
+	m.policy.recordInsert(key, e.hint)
+	if existed {
+		// An update does not grow the store, so it is always admitted.
+		return true, nil
+	}
+	// A new key may overflow the cap; evictIfNeeded decides whether it stays.
+	return m.evictIfNeeded(key, e.hint), nil
 }
 
 // evictionSampleSize is how many entries sampleVictim inspects. Redis's default
 // is 5; higher is more accurate but slower.
 const evictionSampleSize = 5
 
-// evictIfNeeded drops entries until the store is back within its cap. It is
-// called from set under the write lock, so deleting from the map here is safe.
-func (m *MapStore) evictIfNeeded() {
-	for m.maxEntries > 0 && m.Size() > m.maxEntries {
-		victim, ok := m.sampleVictim()
-		if !ok {
-			break
-		}
-		delete(m.data, victim)
+// evictIfNeeded enforces the per-shard cap after a new key has been inserted and
+// reports whether that newcomer was admitted (kept). It runs from set under the
+// write lock, so deleting from the map here is safe.
+//
+// Within the cap there is nothing to do. Over it, the weakest incumbent (from
+// sampleVictim) and the newcomer are scored and handed to the policy's admit: if
+// the newcomer wins, the incumbent is evicted; otherwise the newcomer itself is
+// evicted (rejected). Plain LRU/LFU always admit; TinyLFU is where admit can
+// refuse.
+func (m *MapStore) evictIfNeeded(newKey string, newHint *atomic.Uint64) bool {
+	if m.maxEntries == 0 || m.Size() <= m.maxEntries {
+		return true
 	}
+	k, h, ok := m.sampleVictim(newKey)
+	if !ok {
+		return true
+	}
+
+	scoredNewKey := m.policy.score(newKey, newHint)
+	scoredVictimKey := m.policy.score(k, h)
+	admitted := m.policy.admit(scoredNewKey, scoredVictimKey)
+
+	if admitted {
+		delete(m.data, k)
+	} else {
+		delete(m.data, newKey)
+	}
+
+	return admitted
 }
 
-// sampleVictim inspects up to evictionSampleSize entries and returns the key with
-// the smallest hint — the policy's least-valuable entry (for LRU, the oldest
-// stamp). Go randomizes map iteration, so the first entries seen are effectively
-// a random sample; sampling keeps eviction O(1)-ish at the cost of an
-// approximate, rather than exact, victim.
-func (m *MapStore) sampleVictim() (key string, ok bool) {
-	var victim string
-	var minHint uint64
-	n := 0
+// sampleVictim returns the weakest incumbent — the entry with the lowest
+// policy.score — to consider evicting, skipping excludeKey (the newcomer, which
+// admit judges separately). It inspects at most evictionSampleSize entries; Go
+// randomizes map iteration, so those form a random sample, keeping eviction
+// O(1)-ish at the cost of an approximate victim. ok is false only if the sample
+// was empty.
+func (m *MapStore) sampleVictim(excludeKey string) (key string, hint *atomic.Uint64, ok bool) {
+	var chosenKey string
+	var chosenHint *atomic.Uint64
+	var smallestScore uint64
+	var counter int
 	for k, e := range m.data {
-		h := e.hint.Load()
-		if n == 0 || h < minHint {
-			victim, minHint = k, h
+		if k == excludeKey {
+			continue
 		}
-		if n++; n >= evictionSampleSize {
+
+		tmpCount := m.policy.score(k, e.hint)
+		if counter == 0 || smallestScore > tmpCount {
+			chosenKey = k
+			chosenHint = e.hint
+			smallestScore = tmpCount
+		}
+
+		counter++
+		if counter >= evictionSampleSize {
 			break
 		}
 	}
-	return victim, n > 0
+
+	return chosenKey, chosenHint, counter > 0
 }
 
 // Delete removes key and reports whether it was present beforehand.

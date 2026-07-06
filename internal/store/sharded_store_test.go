@@ -13,7 +13,7 @@ import (
 func TestShardedStore_Basic(t *testing.T) {
 	s := NewSharded(8)
 
-	if err := s.Set("k", []byte("v")); err != nil {
+	if _, err := s.Set("k", []byte("v")); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	got, ok := s.Get("k")
@@ -55,7 +55,7 @@ func TestShardedStore_Concurrent(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < opsPerG; i++ {
 				key := "key" + strconv.Itoa((g+i)%keySpace)
-				if err := s.Set(key, []byte("value")); err != nil {
+				if _, err := s.Set(key, []byte("value")); err != nil {
 					t.Errorf("Set: %v", err)
 					return
 				}
@@ -84,7 +84,7 @@ func BenchmarkShardedStore_Set(b *testing.B) {
 			b.RunParallel(func(pb *testing.PB) {
 				i := 0
 				for pb.Next() {
-					_ = s.Set("key"+strconv.Itoa(i%1024), val)
+					_, _ = s.Set("key"+strconv.Itoa(i%1024), val)
 					i++
 				}
 			})

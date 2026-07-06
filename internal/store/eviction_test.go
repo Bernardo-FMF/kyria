@@ -14,7 +14,7 @@ func TestEviction_BoundsSize(t *testing.T) {
 	m := New(WithMaxEntries(capacity), WithPolicy(NewLRU))
 
 	for i := 0; i < 100; i++ {
-		if err := m.Set("k"+strconv.Itoa(i), []byte("v")); err != nil {
+		if _, err := m.Set("k"+strconv.Itoa(i), []byte("v")); err != nil {
 			t.Fatalf("Set: %v", err)
 		}
 		if m.Size() > capacity {
@@ -35,7 +35,7 @@ func TestEviction_LRUEvictsLeastRecentlyUsed(t *testing.T) {
 	m := New(WithMaxEntries(capacity), WithPolicy(NewLRU))
 
 	for i := 0; i < capacity; i++ {
-		if err := m.Set("k"+strconv.Itoa(i), []byte("v")); err != nil {
+		if _, err := m.Set("k"+strconv.Itoa(i), []byte("v")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -45,7 +45,7 @@ func TestEviction_LRUEvictsLeastRecentlyUsed(t *testing.T) {
 	}
 	// Overflow: the whole store (capacity+1 == evictionSampleSize) is sampled, so
 	// the true LRU victim — k1 — is evicted.
-	if err := m.Set("kNew", []byte("v")); err != nil {
+	if _, err := m.Set("kNew", []byte("v")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -67,7 +67,7 @@ func TestEviction_LRUEvictsLeastRecentlyUsed(t *testing.T) {
 func TestEviction_Disabled(t *testing.T) {
 	m := New()
 	for i := 0; i < 50; i++ {
-		if err := m.Set("k"+strconv.Itoa(i), []byte("v")); err != nil {
+		if _, err := m.Set("k"+strconv.Itoa(i), []byte("v")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -86,7 +86,7 @@ func TestEviction_Sharded(t *testing.T) {
 	s := NewSharded(shards, WithMaxEntries(capacity), WithPolicy(NewLRU))
 
 	for i := 0; i < 1000; i++ {
-		if err := s.Set("k"+strconv.Itoa(i), []byte("v")); err != nil {
+		if _, err := s.Set("k"+strconv.Itoa(i), []byte("v")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -104,7 +104,7 @@ func TestEviction_Sharded(t *testing.T) {
 func TestEviction_ConcurrentReadsLockFree(t *testing.T) {
 	s := NewSharded(8, WithMaxEntries(64), WithPolicy(NewLRU))
 	for i := 0; i < 256; i++ {
-		if err := s.Set("k"+strconv.Itoa(i), []byte("v")); err != nil {
+		if _, err := s.Set("k"+strconv.Itoa(i), []byte("v")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -118,7 +118,7 @@ func TestEviction_ConcurrentReadsLockFree(t *testing.T) {
 			for i := 0; i < 2000; i++ {
 				s.Get("k" + strconv.Itoa(i%256))
 				if i%8 == 0 {
-					_ = s.Set("k"+strconv.Itoa(i%256), []byte("v"))
+					_, _ = s.Set("k"+strconv.Itoa(i%256), []byte("v"))
 				}
 			}
 		}()
@@ -132,44 +132,52 @@ func TestLRU_StampsIncrease(t *testing.T) {
 	p := NewLRU()
 	var a, b atomic.Uint64
 
-	p.recordInsert(&a)
-	p.recordInsert(&b)
+	p.recordInsert("a", &a)
+	p.recordInsert("b", &b)
 	if a.Load() >= b.Load() {
 		t.Errorf("b (%d) should be stamped after a (%d)", b.Load(), a.Load())
 	}
 
-	p.recordAccess(&a) // a is now the most recent
+	p.recordAccess("a", &a) // a is now the most recent
 	if a.Load() <= b.Load() {
 		t.Errorf("after access, a (%d) should outrank b (%d)", a.Load(), b.Load())
 	}
 }
 
-// TestEviction_LFUEvictsLeastFrequentlyUsed: every existing key is accessed at
-// least once, so a brand-new key (which starts at the base count) is the unique
-// least-frequently-used entry — and the one evicted. cap = evictionSampleSize-1
-// so the overflow insert samples every entry (exact eviction).
+// TestEviction_LFUEvictsLeastFrequentlyUsed: pure LFU always admits the newcomer
+// and evicts the least-frequently-used incumbent. Distinct access counts leave k1
+// the unique least-used, so it's the victim while kNew is admitted. cap =
+// evictionSampleSize-1, so every incumbent is sampled (exact eviction).
 func TestEviction_LFUEvictsLeastFrequentlyUsed(t *testing.T) {
 	capacity := evictionSampleSize - 1
 	m := New(WithMaxEntries(capacity), WithPolicy(NewLFU))
 
 	for i := 0; i < capacity; i++ {
-		k := "k" + strconv.Itoa(i)
-		if err := m.Set(k, []byte("v")); err != nil {
+		if _, err := m.Set("k"+strconv.Itoa(i), []byte("v")); err != nil {
 			t.Fatal(err)
 		}
-		m.Get(k) // one access each → every existing key is above the base count
 	}
-	// New key: base count, never accessed → the least frequently used.
-	if err := m.Set("kNew", []byte("v")); err != nil {
+	// Distinct access counts leave k1 the unique least-frequently-used incumbent.
+	for r := 0; r < 3; r++ {
+		m.Get("k0")
+	}
+	m.Get("k2")
+	m.Get("k2")
+	m.Get("k3")
+
+	admitted, err := m.Set("kNew", []byte("v"))
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	if _, ok := m.Get("kNew"); ok {
-		t.Error("kNew (least frequently used) should have been evicted")
+	if !admitted {
+		t.Error("kNew should have been admitted (LFU always admits)")
 	}
-	for i := 0; i < capacity; i++ {
-		if _, ok := m.Get("k" + strconv.Itoa(i)); !ok {
-			t.Errorf("k%d (accessed) should have survived", i)
+	if _, ok := m.Get("k1"); ok {
+		t.Error("k1 (least frequently used) should have been evicted")
+	}
+	for _, k := range []string{"k0", "k2", "k3", "kNew"} {
+		if _, ok := m.Get(k); !ok {
+			t.Errorf("%s should have survived", k)
 		}
 	}
 }
@@ -182,7 +190,7 @@ func TestEviction_LFUProtectsHotKey(t *testing.T) {
 	capacity := evictionSampleSize - 1
 	m := New(WithMaxEntries(capacity), WithPolicy(NewLFU))
 
-	if err := m.Set("hot", []byte("v")); err != nil {
+	if _, err := m.Set("hot", []byte("v")); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 100; i++ {
@@ -190,7 +198,7 @@ func TestEviction_LFUProtectsHotKey(t *testing.T) {
 	}
 	// Churn many cold keys through the store.
 	for i := 0; i < 200; i++ {
-		if err := m.Set("cold"+strconv.Itoa(i), []byte("v")); err != nil {
+		if _, err := m.Set("cold"+strconv.Itoa(i), []byte("v")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -206,12 +214,12 @@ func TestLFU_CountsIncrease(t *testing.T) {
 	p := NewLFU()
 	var h atomic.Uint64
 
-	p.recordInsert(&h)
+	p.recordInsert("k", &h)
 	base := h.Load()
 	if base == 0 {
 		t.Error("recordInsert should seed a nonzero base count")
 	}
-	p.recordAccess(&h)
+	p.recordAccess("k", &h)
 	if h.Load() != base+1 {
 		t.Errorf("after one access, count = %d, want %d", h.Load(), base+1)
 	}

@@ -129,6 +129,9 @@ func Decode(r *bufio.Reader) (Value, error) {
 		if lineLen < 0 {
 			return BulkString(nil), nil
 		}
+		if lineLen > maxBulkSize {
+			return Value{}, protoErrorf("bulk too large: %d bytes", lineLen)
+		}
 		buf := make([]byte, lineLen)
 		_, err = io.ReadFull(r, buf)
 		if err != nil {
@@ -148,6 +151,9 @@ func Decode(r *bufio.Reader) (Value, error) {
 		if lineLen < 0 {
 			return Value{typeTag: typeArray}, nil
 		}
+		if lineLen > maxArrayCount {
+			return Value{}, protoErrorf("array too large: %d elements", lineLen)
+		}
 
 		valueArray := make([]Value, lineLen)
 		for i := range lineLen {
@@ -159,7 +165,7 @@ func Decode(r *bufio.Reader) (Value, error) {
 		}
 		return Array(valueArray...), nil
 	default:
-		return Value{}, fmt.Errorf("protocol: unknown type byte %q", typeTag)
+		return Value{}, protoErrorf("unknown type byte %q", typeTag)
 	}
 }
 
@@ -173,7 +179,7 @@ func readLine(r *bufio.Reader) ([]byte, error) {
 		return nil, err
 	}
 	if len(line) < 2 || line[len(line)-2] != '\r' {
-		return nil, fmt.Errorf("protocol: line missing CRLF terminator")
+		return nil, protoErrorf("line missing CRLF terminator")
 	}
 	return line[:len(line)-2], nil
 }
@@ -183,19 +189,19 @@ func readLine(r *bufio.Reader) ([]byte, error) {
 // prefix. Used for ':' integers and for bulk/array length prefixes.
 func parseInt(b []byte) (int64, error) {
 	if len(b) == 0 {
-		return 0, fmt.Errorf("protocol: empty integer")
+		return 0, protoErrorf("empty integer")
 	}
 	digits, neg := b, false
 	if b[0] == '-' {
 		digits, neg = b[1:], true
 		if len(digits) == 0 {
-			return 0, fmt.Errorf("protocol: invalid integer %q", b)
+			return 0, protoErrorf("invalid integer %q", b)
 		}
 	}
 	var n int64
 	for _, c := range digits {
 		if c < '0' || c > '9' {
-			return 0, fmt.Errorf("protocol: invalid integer %q", b)
+			return 0, protoErrorf("invalid integer %q", b)
 		}
 		n = n*10 + int64(c-'0')
 	}
@@ -205,17 +211,41 @@ func parseInt(b []byte) (int64, error) {
 	return n, nil
 }
 
+// Limits on declared sizes. A network server can't trust these length/count
+// prefixes, so we reject absurd ones before allocating for them.
+const (
+	maxBulkSize   = 512 << 20 // 512 MiB, matching Redis's default proto-max-bulk-len
+	maxArrayCount = 1 << 20   // 1,048,576 elements
+)
+
+// ProtocolError reports input that does not conform to RESP. It is a distinct
+// type from the transport errors (io.EOF, a dropped connection) that Decode also
+// returns, so the server can tell them apart with errors.As — replying to the
+// client on a ProtocolError, but just closing the connection on a transport error.
+type ProtocolError struct {
+	msg string
+}
+
+func (e *ProtocolError) Error() string {
+	return "protocol: " + e.msg
+}
+
+// protoErrorf builds a *ProtocolError with a formatted message.
+func protoErrorf(format string, args ...any) *ProtocolError {
+	return &ProtocolError{msg: fmt.Sprintf(format, args...)}
+}
+
 // Encode writes v to w in RESP2 wire form. The server wraps its connection in a
 // bufio.Writer, so the small writes here are batched into one flush.
 func (v Value) Encode(w io.Writer) error {
-	ew := errWriter{w: w}
+	ew := MemoizedWriter{w: w}
 	v.encode(&ew)
 	return ew.err
 }
 
 // encode writes v through ew, recursing for array elements. ew swallows further
 // writes once one has failed, so the caller checks ew.err just once.
-func (v Value) encode(ew *errWriter) {
+func (v Value) encode(ew *MemoizedWriter) {
 	switch v.typeTag {
 	case typeSimpleString, typeError:
 		ew.writeByte(v.typeTag)
@@ -247,37 +277,37 @@ func (v Value) encode(ew *errWriter) {
 			v.array[i].encode(ew)
 		}
 	default:
-		ew.err = fmt.Errorf("protocol: cannot encode unknown type %q", v.typeTag)
+		ew.err = protoErrorf("cannot encode unknown type %q", v.typeTag)
 	}
 }
 
-// errWriter batches writes to an io.Writer, remembering the first error so the
+// MemoizedWriter batches writes to an io.Writer, remembering the first error so the
 // caller checks once instead of after every write (Rob Pike, "Errors are
 // values"). Its scratch buffer formats the tag byte and integers without
 // allocating.
-type errWriter struct {
+type MemoizedWriter struct {
 	w             io.Writer
 	err           error
 	reusableArray [20]byte // room for a tag byte or a base-10 int64
 }
 
-func (ew *errWriter) writeString(s string) {
+func (ew *MemoizedWriter) writeString(s string) {
 	if ew.err == nil {
 		_, ew.err = io.WriteString(ew.w, s)
 	}
 }
 
-func (ew *errWriter) writeBytes(b []byte) {
+func (ew *MemoizedWriter) writeBytes(b []byte) {
 	if ew.err == nil {
 		_, ew.err = ew.w.Write(b)
 	}
 }
 
-func (ew *errWriter) writeByte(c byte) {
+func (ew *MemoizedWriter) writeByte(c byte) {
 	ew.reusableArray[0] = c
 	ew.writeBytes(ew.reusableArray[:1])
 }
 
-func (ew *errWriter) writeInt(n int64) {
+func (ew *MemoizedWriter) writeInt(n int64) {
 	ew.writeBytes(strconv.AppendInt(ew.reusableArray[:0], n, 10))
 }

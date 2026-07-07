@@ -313,3 +313,31 @@ func TestEviction_TinyLFUAdmission(t *testing.T) {
 		t.Error("k0 (least frequent) should have been evicted")
 	}
 }
+
+// TestEviction_TinyLFUConcurrent hammers a TinyLFU store from many goroutines.
+// recordAccess updates the shared sketch under the read lock, so the sketch's
+// counters must be atomic — running this under -race is what proves it. Run:
+//
+//	go test ./internal/store/ -run TinyLFUConcurrent -race
+func TestEviction_TinyLFUConcurrent(t *testing.T) {
+	s := NewSharded(8, WithMaxEntries(64), WithPolicy(NewTinyLFU(1024)))
+	for i := 0; i < 256; i++ {
+		_, _ = s.Set("k"+strconv.Itoa(i), []byte("v"))
+	}
+
+	const goroutines = 32
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for g := 0; g < goroutines; g++ {
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 2000; i++ {
+				s.Get("k" + strconv.Itoa(i%256))
+				if i%8 == 0 {
+					_, _ = s.Set("k"+strconv.Itoa(i%256), []byte("v"))
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}

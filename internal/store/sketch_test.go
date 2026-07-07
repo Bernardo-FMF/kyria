@@ -54,7 +54,7 @@ func TestSketch_ResetHalvesSaturatedCounters(t *testing.T) {
 
 	s.reset()
 
-	if got, want := s.estimate("x"), uint8(counterMax)>>1; got != want {
+	if got, want := s.estimate("x"), uint32(counterMax)>>1; got != want {
 		t.Errorf("post-reset estimate = %d, want %d (halved)", got, want)
 	}
 }
@@ -67,7 +67,7 @@ func TestSketch_AutoResetsAfterSampleSize(t *testing.T) {
 	for i := 0; i < s.sampleSize; i++ {
 		s.add("x")
 	}
-	if got, want := s.estimate("x"), uint8(counterMax)>>1; got != want {
+	if got, want := s.estimate("x"), uint32(counterMax)>>1; got != want {
 		t.Errorf("estimate after auto-reset = %d, want %d", got, want)
 	}
 }

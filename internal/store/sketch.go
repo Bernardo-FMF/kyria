@@ -3,6 +3,7 @@ package store
 import (
 	"hash/maphash"
 	"math/bits"
+	"sync/atomic"
 )
 
 const (
@@ -21,15 +22,18 @@ const (
 // over-count but never under-counts. reset() halves every counter, and add()
 // calls it automatically once size reaches sampleSize, so stale frequency decays.
 //
-// This implementation is single-threaded (plain []uint8); concurrent use will
-// need atomic counters.
+// The counters and size are atomics, so add, estimate, and reset are safe to call
+// concurrently — TinyLFU updates the sketch from Get under a read lock. Contention
+// only makes it slightly more approximate (a halve may drop a racing increment; a
+// saturating bump may overshoot counterMax a little), which is fine for a
+// frequency sketch.
 type countMinSketch struct {
-	counters   []uint8      // sketchDepth rows × width columns, row-major
-	width      int          // columns per row; a power of two, so a hash maps to a column with & mask
-	mask       uint64       // width-1, to pick a column with & instead of %
-	size       int          // increments since the last reset (drives aging)
-	sampleSize int          // once size reaches this, reset halves every counter
-	seed       maphash.Seed // one seed; each row's column is derived from it by double hashing
+	counters   []atomic.Uint32 // sketchDepth rows × width columns, row-major
+	width      int             // columns per row; a power of two, so a hash maps to a column with & mask
+	mask       uint64          // width-1, to pick a column with & instead of %
+	size       atomic.Uint64   // increments since the last reset (drives aging)
+	sampleSize int             // once size reaches this, reset halves every counter
+	seed       maphash.Seed    // one seed; each row's column is derived from it by double hashing
 }
 
 // NewCountMinSketch returns a sketch sized for roughly capacity distinct keys.
@@ -43,7 +47,7 @@ func NewCountMinSketch(capacity int) *countMinSketch {
 	width := nextPowerOfTwo(capacity)
 
 	return &countMinSketch{
-		counters:   make([]uint8, sketchDepth*width),
+		counters:   make([]atomic.Uint32, sketchDepth*width),
 		width:      width,
 		mask:       uint64(width - 1),
 		sampleSize: 10 * capacity, // reset roughly every 10×capacity increments
@@ -69,25 +73,25 @@ func (s *countMinSketch) add(key string) {
 
 	for row := range sketchDepth {
 		i := s.column(row, h1, h2)
-		if s.counters[i] < counterMax {
-			s.counters[i]++
+		if s.counters[i].Load() < counterMax {
+			s.counters[i].Add(1)
 		}
 	}
 
-	s.size++
-	if s.size >= s.sampleSize {
+	s.size.Add(1)
+	if int(s.size.Load()) >= s.sampleSize {
 		s.reset()
 	}
 }
 
 // estimate returns key's approximate frequency: the minimum of its per-row cells.
-func (s *countMinSketch) estimate(key string) uint8 {
+func (s *countMinSketch) estimate(key string) uint32 {
 	h := maphash.String(s.seed, key)
 	h1, h2 := uint32(h), uint32(h>>32)
 
-	minCount := uint8(counterMax)
+	minCount := uint32(counterMax)
 	for row := range sketchDepth {
-		if c := s.counters[s.column(row, h1, h2)]; c < minCount {
+		if c := s.counters[s.column(row, h1, h2)].Load(); c < minCount {
 			minCount = c
 		}
 	}
@@ -99,9 +103,9 @@ func (s *countMinSketch) estimate(key string) uint8 {
 // increment count, so recent accesses outweigh old ones over time.
 func (s *countMinSketch) reset() {
 	for i := range s.counters {
-		s.counters[i] >>= 1
+		s.counters[i].Store(s.counters[i].Load() >> 1)
 	}
-	s.size = 0
+	s.size.Store(0)
 }
 
 // nextPowerOfTwo returns the smallest power of two >= n (and 1 for n <= 1).

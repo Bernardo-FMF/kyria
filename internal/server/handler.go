@@ -45,9 +45,9 @@ type Handler struct {
 }
 
 // NewHandler returns a Handler backed by s.
-func NewHandler(s store.Store) *Handler {
+func NewHandler(store store.Store) *Handler {
 	return &Handler{
-		store: s,
+		store: store,
 	}
 }
 

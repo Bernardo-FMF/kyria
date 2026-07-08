@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/Bernardo-FMF/kyria/internal/store"
 )
@@ -26,27 +27,32 @@ func TestParseFlags(t *testing.T) {
 		{
 			name: "defaults",
 			args: nil,
-			want: Config{Addr: ":6379", Shards: 32, Eviction: "none"},
+			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: time.Second},
 		},
 		{
 			name: "custom addr and shards",
 			args: []string{"-addr", ":7000", "-shards", "8"},
-			want: Config{Addr: ":7000", Shards: 8, Eviction: "none"},
+			want: Config{Addr: ":7000", Shards: 8, Eviction: "none", ReapInterval: time.Second},
 		},
 		{
 			name: "lru with cap",
 			args: []string{"-eviction", "lru", "-max-entries", "100"},
-			want: Config{Addr: ":6379", Shards: 32, Eviction: "lru", MaxEntries: 100},
+			want: Config{Addr: ":6379", Shards: 32, Eviction: "lru", MaxEntries: 100, ReapInterval: time.Second},
 		},
 		{
 			name: "tinylfu with cap",
 			args: []string{"-eviction", "tinylfu", "-max-entries", "50"},
-			want: Config{Addr: ":6379", Shards: 32, Eviction: "tinylfu", MaxEntries: 50},
+			want: Config{Addr: ":6379", Shards: 32, Eviction: "tinylfu", MaxEntries: 50, ReapInterval: time.Second},
 		},
 		{
 			name: "size limits",
 			args: []string{"-max-value-size", "2048", "-max-key-size", "128"},
-			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", MaxValueSize: 2048, MaxKeySize: 128},
+			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", MaxValueSize: 2048, MaxKeySize: 128, ReapInterval: time.Second},
+		},
+		{
+			name: "custom reap interval (0 disables the janitor)",
+			args: []string{"-reap-interval", "500ms"},
+			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: 500 * time.Millisecond},
 		},
 	}
 	for _, tc := range tests {

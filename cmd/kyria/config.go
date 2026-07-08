@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"time"
 
 	"github.com/Bernardo-FMF/kyria/internal/store"
 )
@@ -11,12 +12,13 @@ import (
 // It is deliberately plain data: parseFlags fills it, storeOptions turns it into
 // store.Options, and main reads Addr. Keeping it here leaves main.go to wiring.
 type Config struct {
-	Addr         string // TCP listen address, e.g. ":6379"
-	Shards       int    // number of lock-striped shards (concurrency)
-	Eviction     string // "none" | "lru" | "lfu" | "tinylfu"
-	MaxEntries   int    // PER-SHARD entry cap; 0 = unbounded (no eviction)
-	MaxValueSize int    // max value bytes; 0 = store default
-	MaxKeySize   int    // max key bytes; 0 = store default
+	Addr         string        // TCP listen address, e.g. ":6379"
+	Shards       int           // number of lock-striped shards (concurrency)
+	Eviction     string        // "none" | "lru" | "lfu" | "tinylfu"
+	MaxEntries   int           // PER-SHARD entry cap; 0 = unbounded (no eviction)
+	MaxValueSize int           // max value bytes; 0 = store default
+	MaxKeySize   int           // max key bytes; 0 = store default
+	ReapInterval time.Duration // active expiry sweep interval; 0 disables the janitor
 }
 
 // parseFlags parses args (typically os.Args[1:]) into a Config using a local
@@ -32,6 +34,7 @@ func parseFlags(args []string) (Config, error) {
 	maxEntries := fs.Int("max-entries", 0, "per-shard entry cap (0 = unbounded)")
 	maxValueSize := fs.Int("max-value-size", 0, "max value bytes (0 = store default)")
 	maxKeySize := fs.Int("max-key-size", 0, "max key bytes (0 = store default)")
+	reapInterval := fs.Duration("reap-interval", time.Second, "active expiry sweep interval (0 disables)")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -44,6 +47,7 @@ func parseFlags(args []string) (Config, error) {
 		MaxEntries:   *maxEntries,
 		MaxValueSize: *maxValueSize,
 		MaxKeySize:   *maxKeySize,
+		ReapInterval: *reapInterval,
 	}
 
 	switch cfg.Eviction {

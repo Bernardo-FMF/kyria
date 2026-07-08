@@ -26,6 +26,11 @@ func main() {
 
 	st := store.NewSharded(cfg.Shards, cfg.storeOptions()...)
 
+	var janitor *store.Janitor
+	if cfg.ReapInterval > 0 {
+		janitor = store.NewJanitor(st, cfg.ReapInterval) // starts the reap goroutine
+	}
+
 	srv := server.NewServer(st)
 	if err := srv.Listen(cfg.Addr); err != nil {
 		log.Fatalf("failed to bind %s: %v", cfg.Addr, err)
@@ -41,6 +46,9 @@ func main() {
 	select {
 	case <-ctx.Done():
 		log.Println("shutting down…")
+		if janitor != nil {
+			janitor.Stop()
+		}
 		if err := srv.Close(); err != nil {
 			log.Printf("close: %v", err)
 		}

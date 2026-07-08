@@ -118,7 +118,7 @@ func Decode(r *bufio.Reader) (Value, error) {
 			return BulkString(nil), nil
 		}
 		if lineLen > maxBulkSize {
-			return Value{}, protoErrorf("bulk too large: %d bytes", lineLen)
+			return Value{}, ProtoErrorf("bulk too large: %d bytes", lineLen)
 		}
 		buf := make([]byte, lineLen)
 		_, err = io.ReadFull(r, buf)
@@ -126,7 +126,8 @@ func Decode(r *bufio.Reader) (Value, error) {
 			return Value{}, err
 		}
 
-		if _, err := r.Discard(len(crlf)); err != nil { // drop the trailing CRLF
+		// discard the trailing CRLF
+		if _, err := r.Discard(len(crlf)); err != nil {
 			return Value{}, err
 		}
 
@@ -140,7 +141,7 @@ func Decode(r *bufio.Reader) (Value, error) {
 			return Value{typeTag: typeArray}, nil
 		}
 		if lineLen > maxArrayCount {
-			return Value{}, protoErrorf("array too large: %d elements", lineLen)
+			return Value{}, ProtoErrorf("array too large: %d elements", lineLen)
 		}
 
 		valueArray := make([]Value, lineLen)
@@ -153,7 +154,7 @@ func Decode(r *bufio.Reader) (Value, error) {
 		}
 		return Array(valueArray...), nil
 	default:
-		return Value{}, protoErrorf("unknown type byte %q", typeTag)
+		return Value{}, ProtoErrorf("unknown type byte %q", typeTag)
 	}
 }
 
@@ -167,7 +168,7 @@ func readLine(r *bufio.Reader) ([]byte, error) {
 		return nil, err
 	}
 	if len(line) < 2 || line[len(line)-2] != '\r' {
-		return nil, protoErrorf("line missing CRLF terminator")
+		return nil, ProtoErrorf("line missing CRLF terminator")
 	}
 	return line[:len(line)-2], nil
 }
@@ -177,19 +178,19 @@ func readLine(r *bufio.Reader) ([]byte, error) {
 // prefix. Used for ':' integers and for bulk/array length prefixes.
 func parseInt(b []byte) (int64, error) {
 	if len(b) == 0 {
-		return 0, protoErrorf("empty integer")
+		return 0, ProtoErrorf("empty integer")
 	}
 	digits, neg := b, false
 	if b[0] == '-' {
 		digits, neg = b[1:], true
 		if len(digits) == 0 {
-			return 0, protoErrorf("invalid integer %q", b)
+			return 0, ProtoErrorf("invalid integer %q", b)
 		}
 	}
 	var n int64
 	for _, c := range digits {
 		if c < '0' || c > '9' {
-			return 0, protoErrorf("invalid integer %q", b)
+			return 0, ProtoErrorf("invalid integer %q", b)
 		}
 		n = n*10 + int64(c-'0')
 	}
@@ -218,8 +219,8 @@ func (e *ProtocolError) Error() string {
 	return "protocol: " + e.msg
 }
 
-// protoErrorf builds a *ProtocolError with a formatted message.
-func protoErrorf(format string, args ...any) *ProtocolError {
+// ProtoErrorf builds a *ProtocolError with a formatted message.
+func ProtoErrorf(format string, args ...any) *ProtocolError {
 	return &ProtocolError{msg: fmt.Sprintf(format, args...)}
 }
 
@@ -265,7 +266,7 @@ func (v Value) encode(ew *MemoizedWriter) {
 			v.array[i].encode(ew)
 		}
 	default:
-		ew.err = protoErrorf("cannot encode unknown type %q", v.typeTag)
+		ew.err = ProtoErrorf("cannot encode unknown type %q", v.typeTag)
 	}
 }
 

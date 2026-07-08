@@ -14,19 +14,19 @@ type Command struct {
 // it returns a *ProtocolError.
 func (v Value) Command() (command Command, err error) {
 	if len(v.array) < 1 {
-		err = protoErrorf("command must be a non-empty array")
+		err = ProtoErrorf("command must be a non-empty array")
 		return
 	}
 
 	if v.array[0].typeTag != typeBulkString {
-		err = protoErrorf("command name must be a bulk string, got type %q", v.array[0].typeTag)
+		err = ProtoErrorf("command name must be a bulk string, got type %q", v.array[0].typeTag)
 		return
 	}
 	command.Name = string(v.array[0].bulk)
 
 	for _, val := range v.array[1:] {
 		if val.typeTag != typeBulkString {
-			err = protoErrorf("command argument must be a bulk string, got type %q", val.typeTag)
+			err = ProtoErrorf("command argument must be a bulk string, got type %q", val.typeTag)
 			return
 		}
 

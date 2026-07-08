@@ -5,7 +5,9 @@ package server
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Bernardo-FMF/kyria/internal/protocol"
 	"github.com/Bernardo-FMF/kyria/internal/store"
@@ -24,17 +26,18 @@ const (
 // all have type func(*Handler, [][]byte) protocol.Value — so commands of
 // different real arities share one signature and fit in a single table.
 type commandSpec struct {
-	arity int                                     // required number of args
-	run   func(*Handler, [][]byte) protocol.Value // method expression that runs it
+	minArgs int                                     // minimum number of args
+	maxArgs int                                     // maximum number of args
+	run     func(*Handler, [][]byte) protocol.Value // method expression that runs it
 }
 
 // commands is the dispatch table: Handle looks the command word up here, checks
 // arity, then calls run. Adding a command is one entry plus its method.
 var commands = map[string]commandSpec{
-	ping: {0, (*Handler).ping},
-	get:  {1, (*Handler).get},
-	set:  {2, (*Handler).set},
-	del:  {1, (*Handler).del},
+	ping: {0, 0, (*Handler).ping},
+	get:  {1, 1, (*Handler).get},
+	set:  {2, 4, (*Handler).set},
+	del:  {1, 1, (*Handler).del},
 }
 
 // Handler executes parsed commands against a store and returns RESP replies. It
@@ -60,18 +63,10 @@ func (h *Handler) Handle(cmd protocol.Command) protocol.Value {
 		return protocol.Error("ERR unknown command '" + cmd.Name + "'")
 	}
 
-	err := validateArgs(cmd.Args, spec.arity, cmd.Name)
-	if err != nil {
-		return protocol.Error(err.Error())
+	if len(cmd.Args) < spec.minArgs || len(cmd.Args) > spec.maxArgs {
+		return protocol.Error(fmt.Sprintf("ERR wrong number of arguments for '%s'", cmd.Name))
 	}
 	return spec.run(h, cmd.Args)
-}
-
-func validateArgs(args [][]byte, expectedSize int, name string) error {
-	if len(args) == expectedSize {
-		return nil
-	}
-	return fmt.Errorf("ERR wrong number of arguments for '%s'", name)
 }
 
 // ping replies +PONG.
@@ -93,12 +88,41 @@ func (h *Handler) get(args [][]byte) protocol.Value {
 func (h *Handler) set(args [][]byte) protocol.Value {
 	key := args[0]
 	value := args[1]
-	// ignore admitted for now
-	_, err := h.store.Set(string(key), value)
-	if err != nil {
-		return protocol.Error("ERR " + err.Error())
+
+	switch len(args) {
+	case 2:
+		// ignore admitted for now
+		_, err := h.store.Set(string(key), value)
+		if err != nil {
+			return protocol.Error("ERR " + err.Error())
+		}
+		return protocol.SimpleString("OK")
+	case 4:
+		option := strings.ToUpper(string(args[2]))
+		n, err := strconv.Atoi(string(args[3]))
+		if err != nil {
+			return protocol.Error("ERR value is not an integer or out of range")
+		}
+
+		var ttl time.Duration
+		switch option {
+		case "EX":
+			ttl = time.Duration(n) * time.Second
+		case "PX":
+			ttl = time.Duration(n) * time.Millisecond
+		default:
+			return protocol.Error("ERR syntax error")
+		}
+
+		// ignore admitted for now
+		_, err = h.store.SetWithTTL(string(key), value, ttl)
+		if err != nil {
+			return protocol.Error("ERR " + err.Error())
+		}
+		return protocol.SimpleString("OK")
+	default:
+		return protocol.Error("ERR syntax error") // e.g. len 3
 	}
-	return protocol.SimpleString("OK")
 }
 
 // del removes the key, replying :1 if it existed or :0 otherwise.

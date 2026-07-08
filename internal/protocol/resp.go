@@ -26,8 +26,8 @@ import (
 // Spec/tests: resp_test.go.  Run: go test ./internal/protocol/
 // Full grammar: https://redis.io/docs/latest/develop/reference/protocol-spec/
 
-// TODO(consts): name the five type bytes above (e.g. typeSimpleString = '+', …).
-// A named const for CRLF ("\r\n") helps too.
+// RESP type bytes — the leading byte that tags every value on the wire — and the
+// "\r\n" that terminates every line.
 const (
 	typeSimpleString = '+'
 	typeError        = '-'
@@ -37,32 +37,20 @@ const (
 	crlf             = "\r\n"
 )
 
-// TODO(Value): one struct that can hold any of the five RESP types; which fields
-// matter depends on typ. Suggested fields:
-//
-//	typ     byte    // one of the type bytes
-//	str     string  // simple-string / error text
-//	integer int64   // integer value
-//	bulk    []byte  // bulk-string bytes; nil means a NULL bulk (distinct from empty)
-//	array   []Value // array elements; nil means a NULL array
-//
-// Keeping bulk/array nil-for-null lets one struct represent "$-1" vs "$0" cleanly.
+// Value is a single RESP value — a tagged union over the five RESP types. typeTag
+// says which one it is; only the field(s) that match are meaningful. For bulk and
+// array, a nil slice is the RESP null ("$-1" / "*-1"), distinct from an empty but
+// present value ("$0" / "*0").
 type Value struct {
-	typeTag byte
-	str     string
-	integer int64
-	bulk    []byte
-	array   []Value
+	typeTag byte    // one of the type bytes above
+	str     string  // simple-string or error text
+	integer int64   // integer value
+	bulk    []byte  // bulk-string bytes; nil is a null bulk
+	array   []Value // array elements; nil is a null array
 }
 
-// TODO(constructors): small helpers so callers build values without poking fields
-// — the server uses these for replies. Signatures:
-//
-//	SimpleString(s string) Value      // typ '+'
-//	Error(msg string) Value           // typ '-'
-//	Integer(n int64) Value            // typ ':'
-//	BulkString(b []byte) Value        // typ '$'  (pass nil for a null bulk)
-//	Array(elems ...Value) Value       // typ '*'
+// These constructors build a Value of each type; the server uses them to assemble
+// replies. Pass a nil slice to BulkString for a RESP null bulk.
 func SimpleString(s string) Value {
 	return Value{
 		typeTag: typeSimpleString,

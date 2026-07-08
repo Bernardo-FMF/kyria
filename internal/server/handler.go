@@ -84,28 +84,27 @@ func (h *Handler) get(args [][]byte) protocol.Value {
 	return protocol.BulkString(value)
 }
 
-// set stores the value and replies +OK, or a RESP error if the store rejects it.
+// set handles SET key value [EX seconds | PX milliseconds]: it stores the value
+// (optionally with an expiry) and replies +OK, or a RESP error if the arguments
+// are malformed or the store rejects the write.
 func (h *Handler) set(args [][]byte) protocol.Value {
-	key := args[0]
+	key := string(args[0])
 	value := args[1]
 
+	// Each branch just sets err from its store call; the shared reply is below.
+	// (ignore admitted for now)
+	var err error
 	switch len(args) {
 	case 2:
-		// ignore admitted for now
-		_, err := h.store.Set(string(key), value)
-		if err != nil {
-			return protocol.Error("ERR " + err.Error())
-		}
-		return protocol.SimpleString("OK")
+		_, err = h.store.Set(key, value)
 	case 4:
-		option := strings.ToUpper(string(args[2]))
-		n, err := strconv.Atoi(string(args[3]))
-		if err != nil {
+		n, convErr := strconv.Atoi(string(args[3]))
+		if convErr != nil {
 			return protocol.Error("ERR value is not an integer or out of range")
 		}
 
 		var ttl time.Duration
-		switch option {
+		switch strings.ToUpper(string(args[2])) {
 		case "EX":
 			ttl = time.Duration(n) * time.Second
 		case "PX":
@@ -114,15 +113,15 @@ func (h *Handler) set(args [][]byte) protocol.Value {
 			return protocol.Error("ERR syntax error")
 		}
 
-		// ignore admitted for now
-		_, err = h.store.SetWithTTL(string(key), value, ttl)
-		if err != nil {
-			return protocol.Error("ERR " + err.Error())
-		}
-		return protocol.SimpleString("OK")
+		_, err = h.store.SetWithTTL(key, value, ttl)
 	default:
 		return protocol.Error("ERR syntax error") // e.g. len 3
 	}
+
+	if err != nil {
+		return protocol.Error("ERR " + err.Error())
+	}
+	return protocol.SimpleString("OK")
 }
 
 // del removes the key, replying :1 if it existed or :0 otherwise.

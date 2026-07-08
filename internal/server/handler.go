@@ -11,80 +11,60 @@ import (
 	"github.com/Bernardo-FMF/kyria/internal/store"
 )
 
-// TODO(Handler + Handle): implement command dispatch.
-//
-// Imports you'll need: "strings", the protocol package, and the store package
-// (github.com/Bernardo-FMF/kyria/internal/{protocol,store}).
-//
-// Handler holds the store that commands run against:
-//
-//	type Handler struct { store store.Store }
-//	func NewHandler(s store.Store) *Handler { ... }
-//
-// Handle runs one parsed command and returns its RESP reply:
-//
-//	func (h *Handler) Handle(cmd protocol.Command) protocol.Value
-//
-// Switch on strings.ToUpper(cmd.Name). Each case first checks its argument count
-// (on a mismatch, reply protocol.Error("ERR wrong number of arguments for '" +
-// cmd.Name + "'")), then does its work. Remember cmd.Args is [][]byte — a key is
-// string(args[i]); a value stays []byte.
-//
-//	PING (0 args) → protocol.SimpleString("PONG").
-//	GET  (1 arg)  → h.store.Get(string(args[0])). Found → protocol.BulkString(val);
-//	                missing → protocol.BulkString(nil) (RESP null = "no such key").
-//	SET  (2 args) → h.store.Set(string(args[0]), args[1]). On error (a size-limit
-//	                violation) → protocol.Error("ERR " + err.Error()); otherwise
-//	                protocol.SimpleString("OK"). Set also returns an "admitted"
-//	                bool — ignore it for now (we can surface admission later).
-//	DEL  (1 arg)  → h.store.Delete(string(args[0])) reports whether it existed;
-//	                protocol.Integer(1) if so, else protocol.Integer(0).
-//	default       → protocol.Error("ERR unknown command '" + cmd.Name + "'").
-//
-// A tiny helper for the arity check (name, got, want → *ProtocolError-style
-// reply Value) keeps the cases uncluttered, but a per-case if is fine too.
+// Command words kyria understands. Handle matches them case-insensitively.
 const (
-	ping   = "PING"
-	get    = "GET"
-	set    = "SET"
-	delete = "DEL"
+	ping = "PING"
+	get  = "GET"
+	set  = "SET"
+	del  = "DEL"
 )
 
+// commandSpec describes one command: how many arguments it requires and the
+// method that runs it. run is a method expression — (*Handler).get and friends
+// all have type func(*Handler, [][]byte) protocol.Value — so commands of
+// different real arities share one signature and fit in a single table.
+type commandSpec struct {
+	arity int                                     // required number of args
+	run   func(*Handler, [][]byte) protocol.Value // method expression that runs it
+}
+
+// commands is the dispatch table: Handle looks the command word up here, checks
+// arity, then calls run. Adding a command is one entry plus its method.
+var commands = map[string]commandSpec{
+	ping: {0, (*Handler).ping},
+	get:  {1, (*Handler).get},
+	set:  {2, (*Handler).set},
+	del:  {1, (*Handler).del},
+}
+
+// Handler executes parsed commands against a store and returns RESP replies. It
+// holds no connection state — the server owns the socket and calls Handle once
+// per decoded command — so it is pure logic, unit-tested directly.
 type Handler struct {
 	store store.Store
 }
 
+// NewHandler returns a Handler backed by s.
 func NewHandler(s store.Store) *Handler {
 	return &Handler{
 		store: s,
 	}
 }
 
+// Handle runs one parsed command and returns its reply. It looks cmd.Name up in
+// the command table (case-insensitively) and rejects an unknown command or a
+// wrong argument count with a RESP error before dispatching to the method.
 func (h *Handler) Handle(cmd protocol.Command) protocol.Value {
-	switch strings.ToUpper(cmd.Name) {
-	case ping:
-		return h.ping()
-	case get:
-		err := validateArgs(cmd.Args, 1, cmd.Name)
-		if err != nil {
-			return protocol.Error(err.Error())
-		}
-		return h.get(cmd.Args[0])
-	case set:
-		err := validateArgs(cmd.Args, 2, cmd.Name)
-		if err != nil {
-			return protocol.Error(err.Error())
-		}
-		return h.set(cmd.Args[0], cmd.Args[1])
-	case delete:
-		err := validateArgs(cmd.Args, 1, cmd.Name)
-		if err != nil {
-			return protocol.Error(err.Error())
-		}
-		return h.delete(cmd.Args[0])
-	default:
+	spec, ok := commands[strings.ToUpper(cmd.Name)]
+	if !ok {
 		return protocol.Error("ERR unknown command '" + cmd.Name + "'")
 	}
+
+	err := validateArgs(cmd.Args, spec.arity, cmd.Name)
+	if err != nil {
+		return protocol.Error(err.Error())
+	}
+	return spec.run(h, cmd.Args)
 }
 
 func validateArgs(args [][]byte, expectedSize int, name string) error {
@@ -94,11 +74,14 @@ func validateArgs(args [][]byte, expectedSize int, name string) error {
 	return fmt.Errorf("ERR wrong number of arguments for '%s'", name)
 }
 
-func (h *Handler) ping() protocol.Value {
+// ping replies +PONG.
+func (h *Handler) ping(args [][]byte) protocol.Value {
 	return protocol.SimpleString("PONG")
 }
 
-func (h *Handler) get(key []byte) protocol.Value {
+// get replies with the value as a bulk string, or a null bulk if the key is absent.
+func (h *Handler) get(args [][]byte) protocol.Value {
+	key := args[0]
 	value, found := h.store.Get(string(key))
 	if !found {
 		return protocol.BulkString(nil)
@@ -106,7 +89,10 @@ func (h *Handler) get(key []byte) protocol.Value {
 	return protocol.BulkString(value)
 }
 
-func (h *Handler) set(key []byte, value []byte) protocol.Value {
+// set stores the value and replies +OK, or a RESP error if the store rejects it.
+func (h *Handler) set(args [][]byte) protocol.Value {
+	key := args[0]
+	value := args[1]
 	// ignore admitted for now
 	_, err := h.store.Set(string(key), value)
 	if err != nil {
@@ -115,7 +101,9 @@ func (h *Handler) set(key []byte, value []byte) protocol.Value {
 	return protocol.SimpleString("OK")
 }
 
-func (h *Handler) delete(key []byte) protocol.Value {
+// del removes the key, replying :1 if it existed or :0 otherwise.
+func (h *Handler) del(args [][]byte) protocol.Value {
+	key := args[0]
 	deleted := h.store.Delete(string(key))
 
 	intVal := 0

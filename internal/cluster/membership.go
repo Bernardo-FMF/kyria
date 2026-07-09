@@ -166,3 +166,10 @@ func (m *Members) Alive() []Node {
 
 	return nodes
 }
+
+func (m *Members) Self() Node {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.nodes[m.self].node
+}

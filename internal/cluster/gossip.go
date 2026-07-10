@@ -13,12 +13,22 @@ import (
 	"time"
 )
 
-// GossipConfig tunes the gossip engine.
-type GossipConfig struct {
-	Seeds          []string      // bootstrap peer UDP addresses ("host:port")
-	GossipInterval time.Duration // how often to heartbeat, gossip, and detect failures
-	FailTimeout    time.Duration // mark a peer Dead after this long with no fresh news
-	Fanout         int           // how many random peers to gossip to each round
+type GossiperOption func(*Gossiper)
+
+func WithSeeds(s []string) GossiperOption {
+	return func(g *Gossiper) { g.seeds = s }
+}
+
+func WithGossipInterval(d time.Duration) GossiperOption {
+	return func(g *Gossiper) { g.gossipInterval = d }
+}
+
+func WithFailTimeout(d time.Duration) GossiperOption {
+	return func(g *Gossiper) { g.failTimeout = d }
+}
+
+func WithFanout(i int) GossiperOption {
+	return func(g *Gossiper) { g.fanout = i }
 }
 
 // Gossiper drives a Members roster over UDP: each round it heartbeats (Bump),
@@ -27,9 +37,12 @@ type GossipConfig struct {
 // receive loop and a periodic gossip loop — both ended by Stop (close the conn to
 // unblock the reader, close stop to end the ticker loop), same shape as the janitor.
 type Gossiper struct {
-	members *Members
-	conn    net.PacketConn
-	cfg     GossipConfig
+	members        *Members
+	conn           net.PacketConn
+	seeds          []string      // bootstrap peer UDP addresses ("host:port")
+	gossipInterval time.Duration // how often to heartbeat, gossip, and detect failures
+	failTimeout    time.Duration // mark a peer Dead after this long with no fresh news
+	fanout         int           // how many random peers to gossip to each round
 
 	stopOnce sync.Once
 	stop     chan struct{}
@@ -195,14 +208,20 @@ func pickPeers(addrs []string, k int) []string {
 
 // NewGossiper wraps a Members roster and a bound UDP connection into a gossip
 // engine. Call Start to run it and Stop to shut it down.
-func NewGossiper(members *Members, conn net.PacketConn, cfg GossipConfig) *Gossiper {
-	return &Gossiper{
-		members: members,
-		conn:    conn,
-		cfg:     cfg,
-
-		stop: make(chan struct{}),
+func NewGossiper(members *Members, conn net.PacketConn, opts ...GossiperOption) *Gossiper {
+	g := &Gossiper{
+		members:        members,
+		conn:           conn,
+		gossipInterval: 1 * time.Second, // defaults live here now
+		failTimeout:    5 * time.Second,
+		fanout:         3,
+		stop:           make(chan struct{}),
 	}
+
+	for _, opt := range opts {
+		opt(g)
+	}
+	return g
 }
 
 // Start launches the two goroutines that run the engine: the receive loop and the
@@ -249,7 +268,7 @@ func (g *Gossiper) receiveLoop() {
 func (g *Gossiper) gossipLoop() {
 	defer g.wg.Done()
 
-	ticker := time.NewTicker(g.cfg.GossipInterval)
+	ticker := time.NewTicker(g.gossipInterval)
 	defer ticker.Stop()
 
 	for {
@@ -270,7 +289,7 @@ func (g *Gossiper) round() {
 	now := time.Now()
 
 	g.members.Bump(now)
-	g.members.DetectFailures(now, g.cfg.FailTimeout)
+	g.members.DetectFailures(now, g.failTimeout)
 
 	self := g.members.Self()
 	var candidates []string
@@ -280,13 +299,13 @@ func (g *Gossiper) round() {
 		}
 	}
 
-	candidates = append(candidates, g.cfg.Seeds...)
+	candidates = append(candidates, g.seeds...)
 	payload, err := marshal(g.members.Snapshot())
 	if err != nil {
 		return
 	}
 
-	for _, addr := range pickPeers(candidates, g.cfg.Fanout) {
+	for _, addr := range pickPeers(candidates, g.fanout) {
 		dst, err := net.ResolveUDPAddr("udp", addr)
 		if err != nil {
 			continue

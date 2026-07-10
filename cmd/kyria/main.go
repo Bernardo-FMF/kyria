@@ -10,7 +10,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/Bernardo-FMF/kyria/internal/cluster"
 	"github.com/Bernardo-FMF/kyria/internal/server"
@@ -44,12 +43,7 @@ func main() {
 		addr := conn.LocalAddr().String()
 		self := cluster.Node{ID: addr, Addr: addr, State: cluster.Alive, Incarnation: 1}
 		members := cluster.NewMembers(self)
-		gossiper = cluster.NewGossiper(members, conn, cluster.GossipConfig{
-			Seeds:          splitSeeds(cfg.Seeds),
-			GossipInterval: 1 * time.Second,
-			FailTimeout:    5 * time.Second,
-			Fanout:         3,
-		})
+		gossiper = cluster.NewGossiper(members, conn, cfg.gossiperOptions()...)
 		gossiper.Start()
 		log.Printf("gossip listening on %s", addr)
 	}

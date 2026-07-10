@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Bernardo-FMF/kyria/internal/cluster"
 	"github.com/Bernardo-FMF/kyria/internal/store"
 )
 
@@ -12,15 +13,18 @@ import (
 // It is deliberately plain data: parseFlags fills it, storeOptions turns it into
 // store.Options, and main reads Addr. Keeping it here leaves main.go to wiring.
 type Config struct {
-	Addr         string        // TCP listen address, e.g. ":6379"
-	Shards       int           // number of lock-striped shards (concurrency)
-	Eviction     string        // "none" | "lru" | "lfu" | "tinylfu"
-	MaxEntries   int           // PER-SHARD entry cap; 0 = unbounded (no eviction)
-	MaxValueSize int           // max value bytes; 0 = store default
-	MaxKeySize   int           // max key bytes; 0 = store default
-	ReapInterval time.Duration // active expiry sweep interval; 0 disables the janitor
-	GossipAddr   string        // UDP gossip address; empty = standalone (no clustering)
-	Seeds        string        // comma-separated seed peer addresses to bootstrap from
+	Addr           string        // TCP listen address, e.g. ":6379"
+	Shards         int           // number of lock-striped shards (concurrency)
+	Eviction       string        // "none" | "lru" | "lfu" | "tinylfu"
+	MaxEntries     int           // PER-SHARD entry cap; 0 = unbounded (no eviction)
+	MaxValueSize   int           // max value bytes; 0 = store default
+	MaxKeySize     int           // max key bytes; 0 = store default
+	ReapInterval   time.Duration // active expiry sweep interval; 0 disables the janitor
+	GossipAddr     string        // UDP gossip address; empty = standalone (no clustering)
+	Seeds          string        // comma-separated seed peer addresses to bootstrap from
+	GossipInterval time.Duration // gossip round interval; 0 = engine default
+	FailTimeout    time.Duration // mark a peer dead after this long silent; 0 = engine default
+	Fanout         int           // peers to gossip per round; 0 = engine default
 }
 
 // parseFlags parses args (typically os.Args[1:]) into a Config using a local
@@ -39,21 +43,27 @@ func parseFlags(args []string) (Config, error) {
 	reapInterval := fs.Duration("reap-interval", time.Second, "active expiry sweep interval (0 disables)")
 	gossipAddr := fs.String("gossip-addr", "", "UDP gossip address (empty = standalone)")
 	seeds := fs.String("seeds", "", "comma-separated seed peer addresses")
+	gossipInterval := fs.Duration("gossip-interval", 0, "gossip round interval (0 = default)")
+	failTimeout := fs.Duration("fail-timeout", 0, "mark a peer dead after this long silent (0 = default)")
+	fanout := fs.Int("fanout", 0, "peers to gossip per round (0 = default)")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
 
 	cfg := Config{
-		Addr:         *addr,
-		Shards:       *shards,
-		Eviction:     *eviction,
-		MaxEntries:   *maxEntries,
-		MaxValueSize: *maxValueSize,
-		MaxKeySize:   *maxKeySize,
-		ReapInterval: *reapInterval,
-		GossipAddr:   *gossipAddr,
-		Seeds:        *seeds,
+		Addr:           *addr,
+		Shards:         *shards,
+		Eviction:       *eviction,
+		MaxEntries:     *maxEntries,
+		MaxValueSize:   *maxValueSize,
+		MaxKeySize:     *maxKeySize,
+		ReapInterval:   *reapInterval,
+		GossipAddr:     *gossipAddr,
+		Seeds:          *seeds,
+		GossipInterval: *gossipInterval,
+		FailTimeout:    *failTimeout,
+		Fanout:         *fanout,
 	}
 
 	switch cfg.Eviction {
@@ -98,6 +108,28 @@ func (c Config) storeOptions() []store.Option {
 		opts = append(opts, store.WithPolicy(store.NewLFU))
 	case "tinylfu":
 		opts = append(opts, store.WithPolicy(store.NewTinyLFU(c.MaxEntries)))
+	}
+
+	return opts
+}
+
+// gossiperOptions translates a Config into the cluster.GossiperOptions passed to
+// cluster.NewGossiper: the seeds, plus any timing knob a flag overrode. A knob left
+// at zero is omitted, so NewGossiper's built-in default applies — the same "append
+// only what's set" shape as storeOptions.
+func (c Config) gossiperOptions() []cluster.GossiperOption {
+	opts := []cluster.GossiperOption{
+		cluster.WithSeeds(splitSeeds(c.Seeds)),
+	}
+
+	if c.GossipInterval > 0 {
+		opts = append(opts, cluster.WithGossipInterval(c.GossipInterval))
+	}
+	if c.FailTimeout > 0 {
+		opts = append(opts, cluster.WithFailTimeout(c.FailTimeout))
+	}
+	if c.Fanout > 0 {
+		opts = append(opts, cluster.WithFanout(c.Fanout))
 	}
 
 	return opts

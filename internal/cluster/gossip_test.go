@@ -116,12 +116,12 @@ func TestGossip_Converges(t *testing.T) {
 		if i != 0 {
 			seeds = []string{seed} // only n0 is a seed
 		}
-		gossipers[i] = NewGossiper(members[i], conns[i], GossipConfig{
-			Seeds:          seeds,
-			GossipInterval: 50 * time.Millisecond,
-			FailTimeout:    2 * time.Second,
-			Fanout:         n,
-		})
+		gossipers[i] = NewGossiper(members[i], conns[i],
+			WithSeeds(seeds),
+			WithGossipInterval(50*time.Millisecond),
+			WithFailTimeout(2*time.Second),
+			WithFanout(n),
+		)
 		gossipers[i].Start()
 	}
 	defer func() {

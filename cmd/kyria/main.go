@@ -5,10 +5,14 @@ package main
 import (
 	"context"
 	"log"
+	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
+	"github.com/Bernardo-FMF/kyria/internal/cluster"
 	"github.com/Bernardo-FMF/kyria/internal/server"
 	"github.com/Bernardo-FMF/kyria/internal/store"
 )
@@ -31,6 +35,25 @@ func main() {
 		janitor = store.NewJanitor(st, cfg.ReapInterval) // starts the reap goroutine
 	}
 
+	var gossiper *cluster.Gossiper
+	if cfg.GossipAddr != "" {
+		conn, err := net.ListenPacket("udp", cfg.GossipAddr)
+		if err != nil {
+			log.Fatalf("failed to bind gossip address %s: %v", cfg.GossipAddr, err)
+		}
+		addr := conn.LocalAddr().String()
+		self := cluster.Node{ID: addr, Addr: addr, State: cluster.Alive, Incarnation: 1}
+		members := cluster.NewMembers(self)
+		gossiper = cluster.NewGossiper(members, conn, cluster.GossipConfig{
+			Seeds:          splitSeeds(cfg.Seeds),
+			GossipInterval: 1 * time.Second,
+			FailTimeout:    5 * time.Second,
+			Fanout:         3,
+		})
+		gossiper.Start()
+		log.Printf("gossip listening on %s", addr)
+	}
+
 	srv := server.NewServer(st)
 	if err := srv.Listen(cfg.Addr); err != nil {
 		log.Fatalf("failed to bind %s: %v", cfg.Addr, err)
@@ -49,10 +72,25 @@ func main() {
 		if janitor != nil {
 			janitor.Stop()
 		}
+		if gossiper != nil {
+			gossiper.Stop()
+		}
 		if err := srv.Close(); err != nil {
 			log.Printf("close: %v", err)
 		}
 	case err := <-serveErr:
 		log.Fatalf("serve: %v", err)
 	}
+}
+
+// splitSeeds parses the comma-separated -seeds value into peer addresses,
+// trimming whitespace and dropping empty entries.
+func splitSeeds(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

@@ -54,6 +54,11 @@ func TestParseFlags(t *testing.T) {
 			args: []string{"-reap-interval", "500ms"},
 			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: 500 * time.Millisecond},
 		},
+		{
+			name: "gossip flags",
+			args: []string{"-gossip-addr", "127.0.0.1:7946", "-seeds", "10.0.0.1:7946,10.0.0.2:7946"},
+			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: time.Second, GossipAddr: "127.0.0.1:7946", Seeds: "10.0.0.1:7946,10.0.0.2:7946"},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -19,6 +19,8 @@ type Config struct {
 	MaxValueSize int           // max value bytes; 0 = store default
 	MaxKeySize   int           // max key bytes; 0 = store default
 	ReapInterval time.Duration // active expiry sweep interval; 0 disables the janitor
+	GossipAddr   string        // UDP gossip address; empty = standalone (no clustering)
+	Seeds        string        // comma-separated seed peer addresses to bootstrap from
 }
 
 // parseFlags parses args (typically os.Args[1:]) into a Config using a local
@@ -35,6 +37,8 @@ func parseFlags(args []string) (Config, error) {
 	maxValueSize := fs.Int("max-value-size", 0, "max value bytes (0 = store default)")
 	maxKeySize := fs.Int("max-key-size", 0, "max key bytes (0 = store default)")
 	reapInterval := fs.Duration("reap-interval", time.Second, "active expiry sweep interval (0 disables)")
+	gossipAddr := fs.String("gossip-addr", "", "UDP gossip address (empty = standalone)")
+	seeds := fs.String("seeds", "", "comma-separated seed peer addresses")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -48,6 +52,8 @@ func parseFlags(args []string) (Config, error) {
 		MaxValueSize: *maxValueSize,
 		MaxKeySize:   *maxKeySize,
 		ReapInterval: *reapInterval,
+		GossipAddr:   *gossipAddr,
+		Seeds:        *seeds,
 	}
 
 	switch cfg.Eviction {

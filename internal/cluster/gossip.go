@@ -291,15 +291,25 @@ func (g *Gossiper) round() {
 	g.members.Bump(now)
 	g.members.DetectFailures(now, g.failTimeout)
 
+	// Gossip targets: every alive peer's address plus the seeds, deduped (a seed we
+	// already know as an alive peer would otherwise be listed twice).
 	self := g.members.Self()
+	seen := make(map[string]bool)
 	var candidates []string
-	for _, node := range g.members.Alive() {
-		if node.ID != self.ID {
-			candidates = append(candidates, node.Addr)
+	addCandidate := func(addr string) {
+		if !seen[addr] {
+			seen[addr] = true
+			candidates = append(candidates, addr)
 		}
 	}
-
-	candidates = append(candidates, g.seeds...)
+	for _, node := range g.members.Alive() {
+		if node.ID != self.ID {
+			addCandidate(node.Addr)
+		}
+	}
+	for _, seed := range g.seeds {
+		addCandidate(seed)
+	}
 	payload, err := marshal(g.members.Snapshot())
 	if err != nil {
 		return

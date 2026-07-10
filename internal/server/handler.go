@@ -9,16 +9,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Bernardo-FMF/kyria/internal/cluster"
 	"github.com/Bernardo-FMF/kyria/internal/protocol"
 	"github.com/Bernardo-FMF/kyria/internal/store"
 )
 
 // Command words kyria understands. Handle matches them case-insensitively.
 const (
-	ping = "PING"
-	get  = "GET"
-	set  = "SET"
-	del  = "DEL"
+	ping  = "PING"
+	get   = "GET"
+	set   = "SET"
+	del   = "DEL"
+	nodes = "NODES"
 )
 
 // commandSpec describes one command: how many arguments it requires and the
@@ -34,23 +36,26 @@ type commandSpec struct {
 // commands is the dispatch table: Handle looks the command word up here, checks
 // arity, then calls run. Adding a command is one entry plus its method.
 var commands = map[string]commandSpec{
-	ping: {0, 0, (*Handler).ping},
-	get:  {1, 1, (*Handler).get},
-	set:  {2, 4, (*Handler).set},
-	del:  {1, 1, (*Handler).del},
+	ping:  {0, 0, (*Handler).ping},
+	get:   {1, 1, (*Handler).get},
+	set:   {2, 4, (*Handler).set},
+	del:   {1, 1, (*Handler).del},
+	nodes: {0, 0, (*Handler).nodes},
 }
 
 // Handler executes parsed commands against a store and returns RESP replies. It
 // holds no connection state — the server owns the socket and calls Handle once
 // per decoded command — so it is pure logic, unit-tested directly.
 type Handler struct {
-	store store.Store
+	store   store.Store
+	members *cluster.Members
 }
 
 // NewHandler returns a Handler backed by s.
-func NewHandler(store store.Store) *Handler {
+func NewHandler(store store.Store, members *cluster.Members) *Handler {
 	return &Handler{
-		store: store,
+		store:   store,
+		members: members,
 	}
 }
 
@@ -135,4 +140,18 @@ func (h *Handler) del(args [][]byte) protocol.Value {
 	}
 
 	return protocol.Integer(int64(intVal))
+}
+
+// nodes replies with the cluster's live membership — one bulk string per alive
+// member — or a RESP error when this node isn't part of a cluster.
+func (h *Handler) nodes(args [][]byte) protocol.Value {
+	if h.members == nil {
+		return protocol.Error("ERR clustering is disabled")
+	}
+	alive := h.members.Alive()
+	elems := make([]protocol.Value, 0, len(alive))
+	for _, n := range alive {
+		elems = append(elems, protocol.BulkString(fmt.Appendf(nil, "%s %s", n.ID, n.Addr)))
+	}
+	return protocol.Array(elems...)
 }

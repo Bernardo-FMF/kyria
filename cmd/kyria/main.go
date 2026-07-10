@@ -34,6 +34,7 @@ func main() {
 		janitor = store.NewJanitor(st, cfg.ReapInterval) // starts the reap goroutine
 	}
 
+	var members *cluster.Members
 	var gossiper *cluster.Gossiper
 	if cfg.GossipAddr != "" {
 		conn, err := net.ListenPacket("udp", cfg.GossipAddr)
@@ -42,13 +43,13 @@ func main() {
 		}
 		addr := conn.LocalAddr().String()
 		self := cluster.Node{ID: addr, Addr: addr, State: cluster.Alive, Incarnation: 1}
-		members := cluster.NewMembers(self)
+		members = cluster.NewMembers(self)
 		gossiper = cluster.NewGossiper(members, conn, cfg.gossiperOptions()...)
 		gossiper.Start()
 		log.Printf("gossip listening on %s", addr)
 	}
 
-	srv := server.NewServer(st)
+	srv := server.NewServer(st, members)
 	if err := srv.Listen(cfg.Addr); err != nil {
 		log.Fatalf("failed to bind %s: %v", cfg.Addr, err)
 	}

@@ -17,7 +17,7 @@ import (
 // a clean Close, so the goroutine's return value is ignored.
 func startServer(t *testing.T) *Server {
 	t.Helper()
-	srv := NewServer(store.New())
+	srv := NewServer(store.New(), nil)
 	if err := srv.Listen("127.0.0.1:0"); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestServer_ProtocolErrorClosesConnection(t *testing.T) {
 // promptly, and Serve returns nil. A ping/pong first guarantees the connection
 // is accepted and tracked before Close runs.
 func TestServer_GracefulShutdown(t *testing.T) {
-	srv := NewServer(store.New())
+	srv := NewServer(store.New(), nil)
 	if err := srv.Listen("127.0.0.1:0"); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}

@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Bernardo-FMF/kyria/internal/cluster"
 	"github.com/Bernardo-FMF/kyria/internal/protocol"
 	"github.com/Bernardo-FMF/kyria/internal/store"
 )
@@ -19,7 +21,7 @@ func reply(t *testing.T, s store.Store, name string, args ...string) string {
 		byteArgs[i] = []byte(a)
 	}
 
-	v := NewHandler(s).Handle(protocol.Command{Name: name, Args: byteArgs})
+	v := NewHandler(s, nil).Handle(protocol.Command{Name: name, Args: byteArgs})
 
 	var buf bytes.Buffer
 	if err := v.Encode(&buf); err != nil {
@@ -144,5 +146,37 @@ func TestHandle_SetWithTTL_Errors(t *testing.T) {
 				t.Errorf("SET %v = %q, want a -ERR error", tc.args, got)
 			}
 		})
+	}
+}
+
+// TestHandle_Nodes: with a cluster, NODES replies with one entry per alive member
+// (order is unspecified, so we assert on membership, not exact bytes).
+func TestHandle_Nodes(t *testing.T) {
+	members := cluster.NewMembers(cluster.Node{ID: "self", Addr: "127.0.0.1:7001", State: cluster.Alive, Incarnation: 1})
+	members.Merge([]cluster.Node{
+		{ID: "peer", Addr: "127.0.0.1:7002", State: cluster.Alive, Incarnation: 1},
+	}, time.Now())
+
+	var buf bytes.Buffer
+	v := NewHandler(store.New(), members).Handle(protocol.Command{Name: "NODES"})
+	if err := v.Encode(&buf); err != nil {
+		t.Fatalf("Encode reply: %v", err)
+	}
+	got := buf.String()
+
+	if !strings.HasPrefix(got, "*2\r\n") {
+		t.Errorf("NODES reply = %q, want an array of 2 members", got)
+	}
+	for _, want := range []string{"self", "127.0.0.1:7001", "peer", "127.0.0.1:7002"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("NODES reply %q is missing %q", got, want)
+		}
+	}
+}
+
+// TestHandle_Nodes_Disabled: without a cluster (standalone node), NODES is an error.
+func TestHandle_Nodes_Disabled(t *testing.T) {
+	if got := reply(t, store.New(), "NODES"); !strings.HasPrefix(got, "-ERR") {
+		t.Errorf("NODES with no cluster = %q, want a -ERR error", got)
 	}
 }

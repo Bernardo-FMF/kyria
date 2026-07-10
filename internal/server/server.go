@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/Bernardo-FMF/kyria/internal/cluster"
 	"github.com/Bernardo-FMF/kyria/internal/protocol"
 	"github.com/Bernardo-FMF/kyria/internal/store"
 )
@@ -33,8 +34,8 @@ type Server struct {
 
 // NewServer returns a Server that dispatches commands against store. Call Listen
 // then Serve to run it.
-func NewServer(store store.Store) *Server {
-	handler := NewHandler(store)
+func NewServer(store store.Store, members *cluster.Members) *Server {
+	handler := NewHandler(store, members)
 	conns := make(map[net.Conn]struct{}, 10)
 
 	return &Server{

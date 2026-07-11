@@ -224,3 +224,53 @@ func TestHandle_Redirect(t *testing.T) {
 		t.Errorf("GET of an owned (absent) key = %q, want $-1 served locally", got)
 	}
 }
+
+// TestHandle_InternalOps: the internal replica verbs (RSET/RGET/RDEL) act on the
+// LOCAL store and bypass routing — a coordinator uses them to place a copy on a
+// node that isn't the key's owner. A client GET of the same key redirects, but RSET
+// stores it right here.
+func TestHandle_InternalOps(t *testing.T) {
+	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1})
+	m.Merge([]cluster.Node{{ID: "b", Addr: "b", State: cluster.Alive, Incarnation: 1}}, time.Now())
+	router := cluster.NewRouter(m, 50, time.Hour)
+	h := NewHandler(store.New(), m, router)
+
+	send := func(name string, args ...string) string {
+		byteArgs := make([][]byte, len(args))
+		for i, a := range args {
+			byteArgs[i] = []byte(a)
+		}
+		var buf bytes.Buffer
+		if err := h.Handle(protocol.Command{Name: name, Args: byteArgs}).Encode(&buf); err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+		return buf.String()
+	}
+
+	// A key this node does not own — the premise: a client op here would redirect.
+	var remoteKey string
+	for i := 0; ; i++ {
+		k := fmt.Sprintf("key-%d", i)
+		if !router.IsLocal(k) {
+			remoteKey = k
+			break
+		}
+	}
+	if got := send("GET", remoteKey); !strings.HasPrefix(got, "-MOVED") {
+		t.Fatalf("client GET of a non-owned key = %q, want -MOVED (test premise)", got)
+	}
+
+	// The internal verbs act locally regardless of ownership.
+	if got := send("RSET", remoteKey, "val"); got != "+OK\r\n" {
+		t.Errorf("RSET of a non-owned key = %q, want +OK (stored locally, no redirect)", got)
+	}
+	if got := send("RGET", remoteKey); got != "$3\r\nval\r\n" {
+		t.Errorf("RGET after RSET = %q, want the stored value $3\\r\\nval", got)
+	}
+	if got := send("RDEL", remoteKey); got != ":1\r\n" {
+		t.Errorf("RDEL of the stored key = %q, want :1", got)
+	}
+	if got := send("RGET", remoteKey); got != "$-1\r\n" {
+		t.Errorf("RGET after RDEL = %q, want a null bulk $-1", got)
+	}
+}

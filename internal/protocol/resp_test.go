@@ -8,6 +8,36 @@ import (
 	"testing"
 )
 
+// TestAsError: AsError reports a RESP error and its text, and rejects everything else.
+func TestAsError(t *testing.T) {
+	if msg, ok := Error("ERR nope").AsError(); !ok || msg != "ERR nope" {
+		t.Errorf("AsError on an error = (%q, %v), want (\"ERR nope\", true)", msg, ok)
+	}
+	if _, ok := SimpleString("OK").AsError(); ok {
+		t.Error("AsError on +OK = ok true, want false")
+	}
+	if _, ok := BulkString([]byte("x")).AsError(); ok {
+		t.Error("AsError on a bulk string = ok true, want false")
+	}
+}
+
+// TestAsBulk: AsBulk returns a present value's bytes, and reports a null bulk (a
+// GET miss) or a non-bulk reply as absent.
+func TestAsBulk(t *testing.T) {
+	if b, ok := BulkString([]byte("hello")).AsBulk(); !ok || string(b) != "hello" {
+		t.Errorf("AsBulk on a bulk = (%q, %v), want (\"hello\", true)", b, ok)
+	}
+	if b, ok := BulkString([]byte{}).AsBulk(); !ok || len(b) != 0 {
+		t.Errorf("AsBulk on an empty (present) bulk = (%q, %v), want (\"\", true)", b, ok)
+	}
+	if _, ok := BulkString(nil).AsBulk(); ok {
+		t.Error("AsBulk on a null bulk = ok true, want false (a miss)")
+	}
+	if _, ok := SimpleString("OK").AsBulk(); ok {
+		t.Error("AsBulk on +OK = ok true, want false")
+	}
+}
+
 // TestEncode pins the exact bytes each value type serializes to.
 func TestEncode(t *testing.T) {
 	tests := []struct {

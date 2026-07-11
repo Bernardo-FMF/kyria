@@ -86,6 +86,27 @@ func Array(elems ...Value) Value {
 	}
 }
 
+// AsError reports whether v is a RESP error reply and returns its message. A peer
+// client uses it to turn a replica's -ERR reply into a Go error. These As* methods
+// are the read side of the constructors above: the server builds replies, a client
+// dialing a peer inspects them.
+func (v Value) AsError() (msg string, ok bool) {
+	if v.typeTag == typeError {
+		return v.str, true
+	}
+	return "", false
+}
+
+// AsBulk returns the bytes of a bulk-string reply and whether a value is present.
+// A null bulk (a GET miss, "$-1") reports (nil, false), and so does any non-bulk
+// value — a caller that has already ruled out an error reads this as "key absent".
+func (v Value) AsBulk() (b []byte, ok bool) {
+	if v.typeTag == typeBulkString && v.bulk != nil {
+		return v.bulk, true
+	}
+	return nil, false
+}
+
 // Decode reads exactly one RESP value from r and returns it; arrays recurse.
 // Malformed input — an unknown tag, a non-numeric length, or a stream that ends
 // mid-value — returns an error.

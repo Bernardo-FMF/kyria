@@ -21,6 +21,17 @@ const (
 	set   = "SET"
 	del   = "DEL"
 	nodes = "NODES"
+
+	// Internal replica verbs — a coordinator sends these to a replica to store, read,
+	// or delete a key on its LOCAL store, bypassing routing and replication.
+	rget = "RGET"
+	rset = "RSET"
+	rdel = "RDEL"
+)
+
+const (
+	ttlEx = "EX"
+	ttlPx = "PX"
 )
 
 // commandSpec describes one command: how many arguments it requires and the
@@ -46,6 +57,13 @@ var commands = map[string]commandSpec{
 	set:   {2, 4, true, (*Handler).set},
 	del:   {1, 1, true, (*Handler).del},
 	nodes: {0, 0, false, (*Handler).nodes},
+
+	// The internal replica verbs reuse the get/set/del methods (identical local-store
+	// ops) but with clusteredOp:false, so Handle skips routing — no -MOVED bounce back
+	// to the coordinator, no re-replication.
+	rget: {1, 1, false, (*Handler).get},
+	rset: {2, 4, false, (*Handler).set},
+	rdel: {1, 1, false, (*Handler).del},
 }
 
 // Handler executes parsed commands against a store and returns RESP replies. It
@@ -136,9 +154,9 @@ func (h *Handler) set(args [][]byte) protocol.Value {
 
 		var ttl time.Duration
 		switch strings.ToUpper(string(args[2])) {
-		case "EX":
+		case ttlEx:
 			ttl = time.Duration(n) * time.Second
-		case "PX":
+		case ttlPx:
 			ttl = time.Duration(n) * time.Millisecond
 		default:
 			return protocol.Error("ERR syntax error")

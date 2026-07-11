@@ -42,6 +42,13 @@ type Store interface {
 	// SetWithTTL returns ErrInvalidTTL. Like Set, it reports whether the entry
 	// was admitted. Size limits apply as with Set.
 	SetWithTTL(key string, value []byte, ttl time.Duration) (admitted bool, err error)
+	// Update atomically replaces key's value with fn(old): it reads the current
+	// value (nil if absent), calls fn to compute the new value, and stores that —
+	// as one indivisible read-modify-write, so concurrent Updates to the same key
+	// cannot interleave and lose a write. It is the primitive the replication layer
+	// uses to fold a new version into a key's stored sibling set. Admission and
+	// size-limit results are reported as by Set.
+	Update(key string, fn func(old []byte) []byte) (admitted bool, err error)
 	// Delete removes key, reporting whether it had been present.
 	Delete(key string) (deleted bool)
 	// Size reports the number of entries currently stored.

@@ -125,6 +125,15 @@ func (m *MapStore) Set(key string, value []byte) (bool, error) {
 	return m.set(key, value, time.Time{})
 }
 
+// Update reads key's current value, applies fn, and stores the result — the read and
+// write as one call. MapStore itself is not synchronized, so on its own this is only
+// atomic within a single goroutine; ShardedStore holds the key's lock across the
+// whole call to make it atomic under concurrency.
+func (m *MapStore) Update(key string, fn func(old []byte) []byte) (bool, error) {
+	old, _ := m.Get(key) // absent key → old == nil
+	return m.Set(key, fn(old))
+}
+
 // SetWithTTL stores a private copy of value under key with a time-to-live: Get
 // treats the entry as absent once ttl has elapsed. ttl must be positive,
 // otherwise SetWithTTL returns ErrInvalidTTL. Size limits apply as with Set.

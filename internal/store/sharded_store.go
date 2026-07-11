@@ -100,6 +100,17 @@ func (s *ShardedStore) SetWithTTL(key string, value []byte, ttl time.Duration) (
 	return shard.store.SetWithTTL(key, value, ttl)
 }
 
+// Update atomically applies fn to key's value. It holds the key's shard lock across
+// the whole read-modify-write, so concurrent Updates to the same key serialize
+// instead of racing and losing writes. Admission and size errors propagate as by Set.
+func (s *ShardedStore) Update(key string, fn func(old []byte) []byte) (bool, error) {
+	shard := s.shardFor(key)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+
+	return shard.store.Update(key, fn)
+}
+
 // Delete removes key and reports whether it had been present.
 func (s *ShardedStore) Delete(key string) bool {
 	shard := s.shardFor(key)

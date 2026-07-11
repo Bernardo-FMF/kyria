@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +22,7 @@ func reply(t *testing.T, s store.Store, name string, args ...string) string {
 		byteArgs[i] = []byte(a)
 	}
 
-	v := NewHandler(s, nil).Handle(protocol.Command{Name: name, Args: byteArgs})
+	v := NewHandler(s, nil, nil).Handle(protocol.Command{Name: name, Args: byteArgs})
 
 	var buf bytes.Buffer
 	if err := v.Encode(&buf); err != nil {
@@ -158,7 +159,7 @@ func TestHandle_Nodes(t *testing.T) {
 	}, time.Now())
 
 	var buf bytes.Buffer
-	v := NewHandler(store.New(), members).Handle(protocol.Command{Name: "NODES"})
+	v := NewHandler(store.New(), members, nil).Handle(protocol.Command{Name: "NODES"})
 	if err := v.Encode(&buf); err != nil {
 		t.Fatalf("Encode reply: %v", err)
 	}
@@ -178,5 +179,48 @@ func TestHandle_Nodes(t *testing.T) {
 func TestHandle_Nodes_Disabled(t *testing.T) {
 	if got := reply(t, store.New(), "NODES"); !strings.HasPrefix(got, "-ERR") {
 		t.Errorf("NODES with no cluster = %q, want a -ERR error", got)
+	}
+}
+
+// TestHandle_Redirect: in a cluster, a keyed command for a key this node does not
+// own is answered with a -MOVED redirect to the owner; a key this node does own is
+// served locally. The node ID is the owner's client (TCP) address, so the ID that
+// the ring returns is exactly what goes into -MOVED.
+func TestHandle_Redirect(t *testing.T) {
+	// Two-node cluster; this node is "a", peer is "b".
+	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1})
+	m.Merge([]cluster.Node{{ID: "b", Addr: "b", State: cluster.Alive, Incarnation: 1}}, time.Now())
+	// A long interval + no Start: NewRouter builds the ring once and we never rebuild.
+	router := cluster.NewRouter(m, 50, time.Hour)
+
+	h := NewHandler(store.New(), m, router)
+
+	send := func(key string) string {
+		var buf bytes.Buffer
+		v := h.Handle(protocol.Command{Name: "GET", Args: [][]byte{[]byte(key)}})
+		if err := v.Encode(&buf); err != nil {
+			t.Fatalf("Encode reply: %v", err)
+		}
+		return buf.String()
+	}
+
+	// firstKey returns the first key-N whose ownership matches want-local.
+	firstKey := func(local bool) string {
+		for i := 0; ; i++ {
+			k := fmt.Sprintf("key-%d", i)
+			if router.IsLocal(k) == local {
+				return k
+			}
+		}
+	}
+
+	// A key owned by the peer → -MOVED b (redirected, not served here).
+	if got := send(firstKey(false)); !strings.HasPrefix(got, "-MOVED ") {
+		t.Errorf("GET of a non-owned key = %q, want a -MOVED redirect", got)
+	}
+
+	// A key owned by this node → served locally (a miss, so a null bulk — not a redirect).
+	if got := send(firstKey(true)); got != "$-1\r\n" {
+		t.Errorf("GET of an owned (absent) key = %q, want $-1 served locally", got)
 	}
 }

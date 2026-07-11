@@ -33,9 +33,9 @@ type Server struct {
 }
 
 // NewServer returns a Server that dispatches commands against store. Call Listen
-// then Serve to run it.
-func NewServer(store store.Store, members *cluster.Members) *Server {
-	handler := NewHandler(store, members)
+// then Serve to run it. members and router may be nil for a standalone node.
+func NewServer(store store.Store, members *cluster.Members, router *cluster.Router) *Server {
+	handler := NewHandler(store, members, router)
 	conns := make(map[net.Conn]struct{}, 10)
 
 	return &Server{

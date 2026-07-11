@@ -25,6 +25,9 @@ type Config struct {
 	GossipInterval time.Duration // gossip round interval; 0 = engine default
 	FailTimeout    time.Duration // mark a peer dead after this long silent; 0 = engine default
 	Fanout         int           // peers to gossip per round; 0 = engine default
+
+	Replicas        int           // virtual nodes per physical node on the hash ring
+	RebuildInterval time.Duration // how often the router rebuilds the ring from membership
 }
 
 // parseFlags parses args (typically os.Args[1:]) into a Config using a local
@@ -46,24 +49,28 @@ func parseFlags(args []string) (Config, error) {
 	gossipInterval := fs.Duration("gossip-interval", 0, "gossip round interval (0 = default)")
 	failTimeout := fs.Duration("fail-timeout", 0, "mark a peer dead after this long silent (0 = default)")
 	fanout := fs.Int("fanout", 0, "peers to gossip per round (0 = default)")
+	replicas := fs.Int("replicas", 100, "virtual nodes per physical node on the hash ring")
+	rebuildInterval := fs.Duration("rebuild-interval", time.Second, "how often the router rebuilds the ring from membership")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
 
 	cfg := Config{
-		Addr:           *addr,
-		Shards:         *shards,
-		Eviction:       *eviction,
-		MaxEntries:     *maxEntries,
-		MaxValueSize:   *maxValueSize,
-		MaxKeySize:     *maxKeySize,
-		ReapInterval:   *reapInterval,
-		GossipAddr:     *gossipAddr,
-		Seeds:          *seeds,
-		GossipInterval: *gossipInterval,
-		FailTimeout:    *failTimeout,
-		Fanout:         *fanout,
+		Addr:            *addr,
+		Shards:          *shards,
+		Eviction:        *eviction,
+		MaxEntries:      *maxEntries,
+		MaxValueSize:    *maxValueSize,
+		MaxKeySize:      *maxKeySize,
+		ReapInterval:    *reapInterval,
+		GossipAddr:      *gossipAddr,
+		Seeds:           *seeds,
+		GossipInterval:  *gossipInterval,
+		FailTimeout:     *failTimeout,
+		Fanout:          *fanout,
+		Replicas:        *replicas,
+		RebuildInterval: *rebuildInterval,
 	}
 
 	switch cfg.Eviction {

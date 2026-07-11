@@ -28,19 +28,24 @@ const (
 // all have type func(*Handler, [][]byte) protocol.Value — so commands of
 // different real arities share one signature and fit in a single table.
 type commandSpec struct {
-	minArgs int                                     // minimum number of args
-	maxArgs int                                     // maximum number of args
-	run     func(*Handler, [][]byte) protocol.Value // method expression that runs it
+	minArgs int // minimum number of args
+	maxArgs int // maximum number of args
+	// clusteredOp is true when args[0] names a key that may be owned by another
+	// node (get/set/del), false for keyless commands (ping/nodes). Handle reads it
+	// to decide whether the command is subject to routing (a possible -MOVED).
+	clusteredOp bool
+	run         func(*Handler, [][]byte) protocol.Value // method expression that runs it
 }
 
 // commands is the dispatch table: Handle looks the command word up here, checks
-// arity, then calls run. Adding a command is one entry plus its method.
+// arity, then calls run. Adding a command is one entry plus its method. The bool
+// is clusteredOp — set it for any command whose first arg is a routable key.
 var commands = map[string]commandSpec{
-	ping:  {0, 0, (*Handler).ping},
-	get:   {1, 1, (*Handler).get},
-	set:   {2, 4, (*Handler).set},
-	del:   {1, 1, (*Handler).del},
-	nodes: {0, 0, (*Handler).nodes},
+	ping:  {0, 0, false, (*Handler).ping},
+	get:   {1, 1, true, (*Handler).get},
+	set:   {2, 4, true, (*Handler).set},
+	del:   {1, 1, true, (*Handler).del},
+	nodes: {0, 0, false, (*Handler).nodes},
 }
 
 // Handler executes parsed commands against a store and returns RESP replies. It
@@ -49,13 +54,18 @@ var commands = map[string]commandSpec{
 type Handler struct {
 	store   store.Store
 	members *cluster.Members
+	// router is the consistent-hash routing table. Like members it is nil in
+	// standalone mode, where Handle serves every key locally (no routing).
+	router *cluster.Router
 }
 
-// NewHandler returns a Handler backed by s.
-func NewHandler(store store.Store, members *cluster.Members) *Handler {
+// NewHandler returns a Handler backed by s. members and router may be nil, which
+// disables the NODES command and key routing respectively (standalone mode).
+func NewHandler(store store.Store, members *cluster.Members, router *cluster.Router) *Handler {
 	return &Handler{
 		store:   store,
 		members: members,
+		router:  router,
 	}
 }
 
@@ -71,6 +81,22 @@ func (h *Handler) Handle(cmd protocol.Command) protocol.Value {
 	if len(cmd.Args) < spec.minArgs || len(cmd.Args) > spec.maxArgs {
 		return protocol.Error(fmt.Sprintf("ERR wrong number of arguments for '%s'", cmd.Name))
 	}
+
+	// Routing: in a cluster, a command whose key this node does not own is answered
+	// with a -MOVED redirect to the owner instead of served here. owner is the
+	// owner's client address (the node ID is its TCP addr), so it drops straight
+	// into the reply for the client to reconnect. MOVED is its own RESP error code,
+	// not an ERR. Standalone nodes (router == nil) and keyless commands skip this
+	// and always serve locally; an empty ring (!ok) falls through and serves locally.
+	if h.router != nil && spec.clusteredOp {
+		key := string(cmd.Args[0])
+		if !h.router.IsLocal(key) {
+			if owner, ok := h.router.Owner(key); ok {
+				return protocol.Error("MOVED " + owner)
+			}
+		}
+	}
+
 	return spec.run(h, cmd.Args)
 }
 

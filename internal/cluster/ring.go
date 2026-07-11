@@ -40,15 +40,22 @@ func NewRing(replicas int) *Ring {
 	}
 }
 
-// Add places node on the ring at replicas virtual points, then re-sorts the point
+// SortedAdd places node on the ring at replicas virtual points, then re-sorts the point
 // list. Adding is a cold path — membership changes rarely — so a full re-sort is
 // fine; the hot path is Get.
+func (r *Ring) SortedAdd(node string) {
+	r.Add(node)
+	r.Sort()
+}
+
 func (r *Ring) Add(node string) {
 	for i := range r.replicas {
 		hash := hashStr(node + "#" + strconv.Itoa(i))
 		r.points = append(r.points, point{hash: hash, node: node})
 	}
+}
 
+func (r *Ring) Sort() {
 	slices.SortFunc(r.points, func(a, b point) int {
 		return cmp.Compare(a.hash, b.hash)
 	})

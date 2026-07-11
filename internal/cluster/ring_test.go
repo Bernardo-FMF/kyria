@@ -21,7 +21,7 @@ func TestRing_Deterministic(t *testing.T) {
 	build := func() *Ring {
 		r := NewRing(50)
 		for _, n := range []string{"a", "b", "c"} {
-			r.Add(n)
+			r.SortedAdd(n)
 		}
 		return r
 	}
@@ -43,7 +43,7 @@ func TestRing_DistributesAcrossNodes(t *testing.T) {
 	nodes := []string{"a", "b", "c", "d"}
 	r := NewRing(100)
 	for _, n := range nodes {
-		r.Add(n)
+		r.SortedAdd(n)
 	}
 
 	counts := map[string]int{}
@@ -65,7 +65,7 @@ func TestRing_MinimalRemapping(t *testing.T) {
 	nodes := []string{"a", "b", "c", "d"}
 	r := NewRing(100)
 	for _, n := range nodes {
-		r.Add(n)
+		r.SortedAdd(n)
 	}
 
 	before := map[string]string{}

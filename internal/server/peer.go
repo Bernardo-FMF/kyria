@@ -98,6 +98,23 @@ func (p *Peer) Del(addr, key string) error {
 	return nil
 }
 
+// Replicate sends the write command [verb, args...] to the replica at addr and
+// returns nil on its ack, or an error on a dial/IO failure or an -ERR reply. The
+// coordinator uses it to fan a client write out as the internal RSET/RDEL verb,
+// forwarding the client's args (key, value, and any EX/PX) verbatim.
+func (p *Peer) Replicate(addr, verb string, args [][]byte) error {
+	all := append([][]byte{[]byte(verb)}, args...)
+	reply, err := p.do(addr, all...)
+	if err != nil {
+		return err
+	}
+	msg, ok := reply.AsError()
+	if ok {
+		return errors.New(msg)
+	}
+	return nil
+}
+
 // do sends args as a RESP command to addr and returns the decoded reply over a
 // pooled connection: a healthy conn goes back to the pool, a failed one is discarded.
 func (p *Peer) do(addr string, args ...[]byte) (protocol.Value, error) {

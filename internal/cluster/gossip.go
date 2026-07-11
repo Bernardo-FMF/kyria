@@ -2,8 +2,6 @@ package cluster
 
 import (
 	"bytes"
-	"encoding/binary"
-	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -11,6 +9,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/Bernardo-FMF/kyria/internal/binenc"
 )
 
 type GossiperOption func(*Gossiper)
@@ -70,47 +70,20 @@ func marshal(nodes []Node) ([]byte, error) {
 	}
 
 	buf := new(bytes.Buffer)
-	encodeUint16(buf, uint16(len(nodes)))
+	binenc.PutUint16(buf, uint16(len(nodes)))
 
 	for _, n := range nodes {
 		buf.WriteByte(byte(n.State))
-		encodeUint64(buf, n.Incarnation)
-		if err := encodeString(buf, n.ID); err != nil {
+		binenc.PutUint64(buf, n.Incarnation)
+		if err := binenc.PutString(buf, n.ID); err != nil {
 			return nil, err
 		}
-		if err := encodeString(buf, n.Addr); err != nil {
+		if err := binenc.PutString(buf, n.Addr); err != nil {
 			return nil, err
 		}
 	}
 	return buf.Bytes(), nil
 }
-
-func encodeUint16(buf *bytes.Buffer, value uint16) {
-	var bs [2]byte
-	binary.BigEndian.PutUint16(bs[:], value)
-	buf.Write(bs[:])
-}
-
-func encodeUint64(buf *bytes.Buffer, value uint64) {
-	var bs [8]byte
-	binary.BigEndian.PutUint64(bs[:], value)
-	buf.Write(bs[:])
-}
-
-func encodeString(buf *bytes.Buffer, value string) error {
-	if len(value) > math.MaxUint16 {
-		return fmt.Errorf("cluster: string too long to encode: %d bytes", len(value))
-	}
-	encodeUint16(buf, uint16(len(value)))
-	buf.WriteString(value)
-	return nil
-}
-
-// errMalformed is returned by unmarshal (and its decode helpers) when a packet is
-// truncated or otherwise malformed. Gossip packets are untrusted network input, so
-// a bad one must produce this error, never a panic — the receive loop then skips it
-// and keeps running.
-var errMalformed = errors.New("cluster: malformed gossip packet")
 
 // unmarshal decodes a gossip message produced by marshal back into a []Node. It
 // walks data with a bounds-checked cursor: because this is untrusted network input,
@@ -118,7 +91,7 @@ var errMalformed = errors.New("cluster: malformed gossip packet")
 // indexing past the slice, so no packet can make it panic.
 func unmarshal(data []byte) ([]Node, error) {
 	cursor := 0
-	count, cursor, err := decodeUint16(data, cursor)
+	count, cursor, err := binenc.Uint16(data, cursor)
 	if err != nil {
 		return nil, err
 	}
@@ -130,21 +103,21 @@ func unmarshal(data []byte) ([]Node, error) {
 	var id, addr string
 	for range count {
 		if len(data)-cursor < 1 {
-			return nil, errMalformed
+			return nil, binenc.ErrMalformed
 		}
 		state := NodeState(data[cursor])
 		cursor++
-		incarnation, cursor, err = decodeUint64(data, cursor)
+		incarnation, cursor, err = binenc.Uint64(data, cursor)
 		if err != nil {
 			return nil, err
 		}
 
-		id, cursor, err = decodeString(data, cursor)
+		id, cursor, err = binenc.String(data, cursor)
 		if err != nil {
 			return nil, err
 		}
 
-		addr, cursor, err = decodeString(data, cursor)
+		addr, cursor, err = binenc.String(data, cursor)
 		if err != nil {
 			return nil, err
 		}
@@ -153,42 +126,6 @@ func unmarshal(data []byte) ([]Node, error) {
 	}
 
 	return nodes, nil
-}
-
-// decodeUint16 reads a big-endian uint16 at off, returning it and the advanced
-// offset — or errMalformed if fewer than 2 bytes remain.
-func decodeUint16(data []byte, off int) (uint16, int, error) {
-	if len(data)-off < 2 {
-		return 0, off, errMalformed
-	}
-
-	v := binary.BigEndian.Uint16(data[off:])
-	return v, off + 2, nil
-}
-
-// decodeUint64 reads a big-endian uint64 at off, returning it and the advanced
-// offset — or errMalformed if fewer than 8 bytes remain.
-func decodeUint64(data []byte, off int) (uint64, int, error) {
-	if len(data)-off < 8 {
-		return 0, off, errMalformed
-	}
-
-	v := binary.BigEndian.Uint64(data[off:])
-	return v, off + 8, nil
-}
-
-// decodeString reads a uint16 length prefix then that many bytes, returning the
-// string and the advanced offset.
-func decodeString(data []byte, off int) (string, int, error) {
-	n, off, err := decodeUint16(data, off)
-	if err != nil {
-		return "", off, err
-	}
-	if len(data)-off < int(n) {
-		return "", off, errMalformed
-	}
-	s := string(data[off : off+int(n)])
-	return s, off + int(n), nil
 }
 
 // pickPeers returns up to k addresses chosen at random from addrs. It works on a

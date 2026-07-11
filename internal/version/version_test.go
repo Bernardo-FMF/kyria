@@ -1,6 +1,7 @@
-package store
+package version
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/Bernardo-FMF/kyria/internal/vclock"
@@ -75,5 +76,44 @@ func TestReconcile_DropsAndKeeps(t *testing.T) {
 	set := valueSet(got)
 	if len(got) != 2 || !set["B"] || !set["C"] || set["A"] {
 		t.Errorf("Reconcile = %v, want [B, C] (A superseded)", set)
+	}
+}
+
+// TestCodec_RoundTrip: Encode then Decode reproduces the sibling set exactly,
+// including a binary value and multi-node clocks.
+func TestCodec_RoundTrip(t *testing.T) {
+	versions := []Version{
+		{Value: []byte("hello"), Clock: vclock.Clock{"n1": 3, "n2": 1}},
+		{Value: []byte{0x00, 0xff, 0x10, 0x00}, Clock: vclock.Clock{"node-b": 7}},
+	}
+
+	got, err := Decode(Encode(versions))
+	if err != nil {
+		t.Fatalf("Decode(Encode(...)): %v", err)
+	}
+	if !reflect.DeepEqual(got, versions) {
+		t.Errorf("round-trip = %#v, want %#v", got, versions)
+	}
+}
+
+// TestDecode_Empty: an empty blob is a key with no value yet — an empty set, no error.
+func TestDecode_Empty(t *testing.T) {
+	got, err := Decode(nil)
+	if err != nil {
+		t.Fatalf("Decode(nil): %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("Decode(nil) = %v, want an empty set", got)
+	}
+}
+
+// TestDecode_Truncated: every proper prefix of a valid blob is rejected, not
+// panicked on — the guard against a corrupt/short read.
+func TestDecode_Truncated(t *testing.T) {
+	full := Encode([]Version{{Value: []byte("hello"), Clock: vclock.Clock{"n1": 1}}})
+	for i := 1; i < len(full); i++ {
+		if _, err := Decode(full[:i]); err == nil {
+			t.Errorf("Decode of a truncated blob (%d of %d bytes) = nil error, want an error", i, len(full))
+		}
 	}
 }

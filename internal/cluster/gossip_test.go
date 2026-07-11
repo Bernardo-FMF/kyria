@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/Bernardo-FMF/kyria/internal/binenc"
 )
 
 // TestGossipMarshalRoundTrip: a []Node survives marshal → unmarshal unchanged.
@@ -42,8 +44,8 @@ func TestUnmarshal_Truncated(t *testing.T) {
 	}
 
 	for cut := 0; cut < len(full); cut++ {
-		if _, err := unmarshal(full[:cut]); !errors.Is(err, errMalformed) {
-			t.Errorf("unmarshal(full[:%d]) error = %v, want errMalformed", cut, err)
+		if _, err := unmarshal(full[:cut]); !errors.Is(err, binenc.ErrMalformed) {
+			t.Errorf("unmarshal(full[:%d]) error = %v, want ErrMalformed", cut, err)
 		}
 	}
 }

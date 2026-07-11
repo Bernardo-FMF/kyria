@@ -77,6 +77,43 @@ func (r *Ring) Get(key string) (string, bool) {
 
 	hash := hashStr(key)
 
+	idx := findIndex(r, hash)
+	return r.points[idx].node, true
+}
+
+// GetN returns the replica set for key: the primary (the node Get returns) plus the
+// next n-1 DISTINCT physical nodes clockwise, in that order. It returns fewer than n
+// only when the cluster has fewer than n nodes. This is the set the coordinator
+// writes to and reads from under quorum.
+func (r *Ring) GetN(key string, n int) []string {
+	if len(r.points) == 0 || n <= 0 {
+		return nil
+	}
+
+	hash := hashStr(key)
+	idx := findIndex(r, hash)
+	// Walk clockwise from the key's position, taking each physical node the first
+	// time we meet it. Virtual nodes repeat the same node around the ring, so the
+	// slices.Contains skip is what keeps the replica set to n DISTINCT machines. The
+	// (idx+i)%count wraps the walk around the end of the ring; the loop is capped at
+	// count so a cluster smaller than n stops instead of spinning.
+	count := len(r.points)
+	var nodes []string
+	for i := range count {
+		p := r.points[(idx+i)%count]
+
+		if !slices.Contains(nodes, p.node) {
+			nodes = append(nodes, p.node)
+		}
+		if len(nodes) == n {
+			break
+		}
+	}
+
+	return nodes
+}
+
+func findIndex(r *Ring, hash uint64) int {
 	idx := sort.Search(len(r.points), func(i int) bool {
 		return r.points[i].hash >= hash
 	})
@@ -84,7 +121,7 @@ func (r *Ring) Get(key string) (string, bool) {
 	if idx == len(r.points) { // hashed past the last point; wrap to the first (circular)
 		idx = 0
 	}
-	return r.points[idx].node, true
+	return idx
 }
 
 const (

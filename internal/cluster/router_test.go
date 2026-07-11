@@ -89,3 +89,23 @@ func TestRouter_ConcurrentAccess(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestRouter_Owners: Owners returns the replica set from the live ring, primary
+// first — and the primary agrees with Owner, so a redirected client lands on the
+// same node the coordinator logic treats as replica 0.
+func TestRouter_Owners(t *testing.T) {
+	m := membersWith("a", "b", "c", "d")
+	r := NewRouter(m, 50, time.Second)
+
+	for i := 0; i < 200; i++ {
+		key := fmt.Sprintf("key-%d", i)
+		got := r.Owners(key, 3)
+
+		if len(got) != 3 {
+			t.Fatalf("Owners(%q, 3) = %v, want 3 replicas", key, got)
+		}
+		if owner, _ := r.Owner(key); got[0] != owner {
+			t.Errorf("Owners(%q, 3)[0] = %q, want the primary %q", key, got[0], owner)
+		}
+	}
+}

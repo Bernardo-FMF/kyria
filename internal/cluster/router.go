@@ -92,3 +92,10 @@ func (r *Router) IsLocal(key string) bool {
 	owner, ok := r.Owner(key)
 	return ok && owner == r.self
 }
+
+// Owners returns the replica set for key — the n distinct nodes that should hold it,
+// primary first. The lock-free ring Load means the coordinator can read the replica
+// set on the request path without contending with a rebuild.
+func (r *Router) Owners(key string, n int) []string {
+	return r.ring.Load().GetN(key, n)
+}

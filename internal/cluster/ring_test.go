@@ -90,3 +90,58 @@ func TestRing_MinimalRemapping(t *testing.T) {
 		}
 	}
 }
+
+// TestRing_GetN_DistinctReplicas: GetN returns n distinct physical nodes with the
+// primary (what Get returns) first — the replica set for a key. The distinctness
+// check is the crux: virtual nodes repeat each physical node around the ring, so a
+// naive walk would hand back the same machine several times.
+func TestRing_GetN_DistinctReplicas(t *testing.T) {
+	nodes := []string{"a", "b", "c", "d", "e"}
+	r := NewRing(100)
+	for _, n := range nodes {
+		r.SortedAdd(n)
+	}
+
+	for i := 0; i < 500; i++ {
+		key := fmt.Sprintf("key-%d", i)
+		got := r.GetN(key, 3)
+
+		if len(got) != 3 {
+			t.Fatalf("GetN(%q, 3) = %v (len %d), want 3 nodes", key, got, len(got))
+		}
+		seen := map[string]bool{}
+		for _, n := range got {
+			if seen[n] {
+				t.Fatalf("GetN(%q, 3) = %v has a duplicate physical node", key, got)
+			}
+			seen[n] = true
+		}
+		if primary, _ := r.Get(key); got[0] != primary {
+			t.Errorf("GetN(%q, 3)[0] = %q, want the Get primary %q", key, got[0], primary)
+		}
+	}
+}
+
+// TestRing_GetN_FewerNodesThanN: asking for more replicas than there are nodes
+// returns every node exactly once — no duplicates, no padding.
+func TestRing_GetN_FewerNodesThanN(t *testing.T) {
+	r := NewRing(100)
+	r.SortedAdd("a")
+	r.SortedAdd("b")
+
+	got := r.GetN("key-1", 5)
+	if len(got) != 2 {
+		t.Fatalf("GetN with 2 nodes and n=5 = %v, want 2 distinct nodes", got)
+	}
+	if got[0] == got[1] {
+		t.Errorf("GetN = %v, want 2 distinct nodes", got)
+	}
+}
+
+// TestRing_GetN_Empty: no nodes → no replicas.
+func TestRing_GetN_Empty(t *testing.T) {
+	r := NewRing(10)
+	if got := r.GetN("k", 3); len(got) != 0 {
+		t.Errorf("GetN on an empty ring = %v, want none", got)
+	}
+}

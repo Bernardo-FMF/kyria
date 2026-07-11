@@ -40,6 +40,10 @@ func main() {
 	var members *cluster.Members
 	var gossiper *cluster.Gossiper
 	var router *cluster.Router
+	// peer and coordinator make up the replication layer; both stay nil in standalone
+	// mode, which leaves NewServer with a nil coordinator (replication off).
+	var peer *server.Peer
+	var coordinator *server.Coordinator
 	if cfg.GossipAddr != "" {
 		conn, err := net.ListenPacket("udp", cfg.GossipAddr)
 		if err != nil {
@@ -59,10 +63,15 @@ func main() {
 		router = cluster.NewRouter(members, cfg.Replicas, cfg.RebuildInterval)
 		router.Start()
 
+		// The replica set is talked to over the client port, so the coordinator's
+		// "self" is this node's ID (its client address), matching what the ring returns.
+		peer = server.NewPeer(cfg.ReplicaTimeout)
+		coordinator = server.NewCoordinator(self.ID, router, peer, cfg.ReplicationFactor, cfg.ReadQuorum, cfg.WriteQuorum)
+
 		log.Printf("gossip listening on %s", addr)
 	}
 
-	srv := server.NewServer(st, members, router)
+	srv := server.NewServer(st, members, router, coordinator)
 	if err := srv.Listen(cfg.Addr); err != nil {
 		log.Fatalf("failed to bind %s: %v", cfg.Addr, err)
 	}
@@ -86,6 +95,9 @@ func main() {
 		if router != nil {
 			router.Stop() // end the background ring-rebuild loop
 		}
+		if peer != nil {
+			peer.Close() // release pooled replica connections
+		}
 		if err := srv.Close(); err != nil {
 			log.Printf("close: %v", err)
 		}
@@ -98,7 +110,7 @@ func main() {
 // trimming whitespace and dropping empty entries.
 func splitSeeds(s string) []string {
 	var out []string
-	for _, p := range strings.Split(s, ",") {
+	for p := range strings.SplitSeq(s, ",") {
 		if p = strings.TrimSpace(p); p != "" {
 			out = append(out, p)
 		}

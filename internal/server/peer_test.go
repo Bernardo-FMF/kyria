@@ -101,7 +101,7 @@ func TestPeer_ConcurrentUse(t *testing.T) {
 	// A concurrency test needs a concurrency-safe store: startServer uses a bare
 	// MapStore, which races under parallel writes. NewSharded (what production uses)
 	// is lock-striped, so the store is no longer the thing under test — the pool is.
-	srv := NewServer(store.NewSharded(8), nil, nil)
+	srv := NewServer(store.NewSharded(8), nil, nil, nil)
 	if err := srv.Listen("127.0.0.1:0"); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}

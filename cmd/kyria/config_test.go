@@ -27,47 +27,52 @@ func TestParseFlags(t *testing.T) {
 		{
 			name: "defaults",
 			args: nil,
-			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second},
+			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second},
 		},
 		{
 			name: "custom addr and shards",
 			args: []string{"-addr", ":7000", "-shards", "8"},
-			want: Config{Addr: ":7000", Shards: 8, Eviction: "none", ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second},
+			want: Config{Addr: ":7000", Shards: 8, Eviction: "none", ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second},
 		},
 		{
 			name: "lru with cap",
 			args: []string{"-eviction", "lru", "-max-entries", "100"},
-			want: Config{Addr: ":6379", Shards: 32, Eviction: "lru", MaxEntries: 100, ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second},
+			want: Config{Addr: ":6379", Shards: 32, Eviction: "lru", MaxEntries: 100, ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second},
 		},
 		{
 			name: "tinylfu with cap",
 			args: []string{"-eviction", "tinylfu", "-max-entries", "50"},
-			want: Config{Addr: ":6379", Shards: 32, Eviction: "tinylfu", MaxEntries: 50, ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second},
+			want: Config{Addr: ":6379", Shards: 32, Eviction: "tinylfu", MaxEntries: 50, ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second},
 		},
 		{
 			name: "size limits",
 			args: []string{"-max-value-size", "2048", "-max-key-size", "128"},
-			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", MaxValueSize: 2048, MaxKeySize: 128, ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second},
+			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", MaxValueSize: 2048, MaxKeySize: 128, ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second},
 		},
 		{
 			name: "custom reap interval (0 disables the janitor)",
 			args: []string{"-reap-interval", "500ms"},
-			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: 500 * time.Millisecond, Replicas: 100, RebuildInterval: time.Second},
+			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: 500 * time.Millisecond, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second},
 		},
 		{
 			name: "gossip flags",
 			args: []string{"-gossip-addr", "127.0.0.1:7946", "-seeds", "10.0.0.1:7946,10.0.0.2:7946"},
-			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: time.Second, GossipAddr: "127.0.0.1:7946", Seeds: "10.0.0.1:7946,10.0.0.2:7946", Replicas: 100, RebuildInterval: time.Second},
+			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: time.Second, GossipAddr: "127.0.0.1:7946", Seeds: "10.0.0.1:7946,10.0.0.2:7946", Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second},
 		},
 		{
 			name: "gossip timing flags",
 			args: []string{"-gossip-interval", "2s", "-fail-timeout", "10s", "-fanout", "5"},
-			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: time.Second, GossipInterval: 2 * time.Second, FailTimeout: 10 * time.Second, Fanout: 5, Replicas: 100, RebuildInterval: time.Second},
+			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: time.Second, GossipInterval: 2 * time.Second, FailTimeout: 10 * time.Second, Fanout: 5, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second},
 		},
 		{
 			name: "routing flags",
 			args: []string{"-replicas", "256", "-rebuild-interval", "5s"},
-			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: time.Second, Replicas: 256, RebuildInterval: 5 * time.Second},
+			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: time.Second, Replicas: 256, RebuildInterval: 5 * time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second},
+		},
+		{
+			name: "replication flags",
+			args: []string{"-replication-factor", "5", "-read-quorum", "3", "-write-quorum", "4", "-replica-timeout", "1s"},
+			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 5, ReadQuorum: 3, WriteQuorum: 4, ReplicaTimeout: time.Second},
 		},
 	}
 	for _, tc := range tests {
@@ -94,6 +99,9 @@ func TestParseFlags_Errors(t *testing.T) {
 		{"unknown eviction", []string{"-eviction", "bogus"}},
 		{"policy without cap", []string{"-eviction", "lru"}},
 		{"policy with zero cap", []string{"-eviction", "lfu", "-max-entries", "0"}},
+		{"replication-factor below 1", []string{"-replication-factor", "0"}},
+		{"read-quorum above replication-factor", []string{"-read-quorum", "5", "-replication-factor", "3"}},
+		{"write-quorum below 1", []string{"-write-quorum", "0"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -13,21 +13,24 @@ import (
 // It is deliberately plain data: parseFlags fills it, storeOptions turns it into
 // store.Options, and main reads Addr. Keeping it here leaves main.go to wiring.
 type Config struct {
-	Addr           string        // TCP listen address, e.g. ":6379"
-	Shards         int           // number of lock-striped shards (concurrency)
-	Eviction       string        // "none" | "lru" | "lfu" | "tinylfu"
-	MaxEntries     int           // PER-SHARD entry cap; 0 = unbounded (no eviction)
-	MaxValueSize   int           // max value bytes; 0 = store default
-	MaxKeySize     int           // max key bytes; 0 = store default
-	ReapInterval   time.Duration // active expiry sweep interval; 0 disables the janitor
-	GossipAddr     string        // UDP gossip address; empty = standalone (no clustering)
-	Seeds          string        // comma-separated seed peer addresses to bootstrap from
-	GossipInterval time.Duration // gossip round interval; 0 = engine default
-	FailTimeout    time.Duration // mark a peer dead after this long silent; 0 = engine default
-	Fanout         int           // peers to gossip per round; 0 = engine default
-
-	Replicas        int           // virtual nodes per physical node on the hash ring
-	RebuildInterval time.Duration // how often the router rebuilds the ring from membership
+	Addr              string        // TCP listen address, e.g. ":6379"
+	Shards            int           // number of lock-striped shards (concurrency)
+	Eviction          string        // "none" | "lru" | "lfu" | "tinylfu"
+	MaxEntries        int           // PER-SHARD entry cap; 0 = unbounded (no eviction)
+	MaxValueSize      int           // max value bytes; 0 = store default
+	MaxKeySize        int           // max key bytes; 0 = store default
+	ReapInterval      time.Duration // active expiry sweep interval; 0 disables the janitor
+	GossipAddr        string        // UDP gossip address; empty = standalone (no clustering)
+	Seeds             string        // comma-separated seed peer addresses to bootstrap from
+	GossipInterval    time.Duration // gossip round interval; 0 = engine default
+	FailTimeout       time.Duration // mark a peer dead after this long silent; 0 = engine default
+	Fanout            int           // peers to gossip per round; 0 = engine default
+	Replicas          int           // virtual nodes per physical node on the hash ring
+	RebuildInterval   time.Duration // how often the router rebuilds the ring from membership
+	ReplicationFactor int           // N: how many nodes hold each key
+	ReadQuorum        int           // R: responses a read waits for
+	WriteQuorum       int           // W: acks a write waits for
+	ReplicaTimeout    time.Duration // per-op dial+IO timeout to a replica
 }
 
 // parseFlags parses args (typically os.Args[1:]) into a Config using a local
@@ -51,26 +54,34 @@ func parseFlags(args []string) (Config, error) {
 	fanout := fs.Int("fanout", 0, "peers to gossip per round (0 = default)")
 	replicas := fs.Int("replicas", 100, "virtual nodes per physical node on the hash ring")
 	rebuildInterval := fs.Duration("rebuild-interval", time.Second, "how often the router rebuilds the ring from membership")
+	replicationFactor := fs.Int("replication-factor", 3, "replicas per key (N)")
+	readQuorum := fs.Int("read-quorum", 2, "responses a read waits for (R)")
+	writeQuorum := fs.Int("write-quorum", 2, "acks a write waits for (W)")
+	replicaTimeout := fs.Duration("replica-timeout", 2*time.Second, "per-op timeout talking to a replica")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
 
 	cfg := Config{
-		Addr:            *addr,
-		Shards:          *shards,
-		Eviction:        *eviction,
-		MaxEntries:      *maxEntries,
-		MaxValueSize:    *maxValueSize,
-		MaxKeySize:      *maxKeySize,
-		ReapInterval:    *reapInterval,
-		GossipAddr:      *gossipAddr,
-		Seeds:           *seeds,
-		GossipInterval:  *gossipInterval,
-		FailTimeout:     *failTimeout,
-		Fanout:          *fanout,
-		Replicas:        *replicas,
-		RebuildInterval: *rebuildInterval,
+		Addr:              *addr,
+		Shards:            *shards,
+		Eviction:          *eviction,
+		MaxEntries:        *maxEntries,
+		MaxValueSize:      *maxValueSize,
+		MaxKeySize:        *maxKeySize,
+		ReapInterval:      *reapInterval,
+		GossipAddr:        *gossipAddr,
+		Seeds:             *seeds,
+		GossipInterval:    *gossipInterval,
+		FailTimeout:       *failTimeout,
+		Fanout:            *fanout,
+		Replicas:          *replicas,
+		RebuildInterval:   *rebuildInterval,
+		ReplicationFactor: *replicationFactor,
+		ReadQuorum:        *readQuorum,
+		WriteQuorum:       *writeQuorum,
+		ReplicaTimeout:    *replicaTimeout,
 	}
 
 	switch cfg.Eviction {
@@ -82,6 +93,20 @@ func parseFlags(args []string) (Config, error) {
 
 	if cfg.Eviction != "none" && cfg.MaxEntries <= 0 {
 		return Config{}, fmt.Errorf("-eviction %s needs -max-entries > 0", cfg.Eviction)
+	}
+
+	// Quorum bounds: R and W must be reachable within the replica set. R+W>N gives
+	// read-your-writes, but a weaker config is still valid, so we don't require it.
+	if cfg.ReplicationFactor <= 0 {
+		return Config{}, fmt.Errorf("-replication-factor must be >= 1, got %d", cfg.ReplicationFactor)
+	}
+
+	if cfg.ReadQuorum <= 0 || cfg.ReadQuorum > cfg.ReplicationFactor {
+		return Config{}, fmt.Errorf("-read-quorum must be in [1, %d], got %d", cfg.ReplicationFactor, cfg.ReadQuorum)
+	}
+
+	if cfg.WriteQuorum <= 0 || cfg.WriteQuorum > cfg.ReplicationFactor {
+		return Config{}, fmt.Errorf("-write-quorum must be in [1, %d], got %d", cfg.ReplicationFactor, cfg.WriteQuorum)
 	}
 
 	return cfg, nil

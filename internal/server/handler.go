@@ -75,15 +75,19 @@ type Handler struct {
 	// router is the consistent-hash routing table. Like members it is nil in
 	// standalone mode, where Handle serves every key locally (no routing).
 	router *cluster.Router
+	// coordinator drives N/R/W replication for clustered ops. nil in standalone (or
+	// when replication is off), where Handle serves clustered ops locally, no quorum.
+	coordinator *Coordinator
 }
 
-// NewHandler returns a Handler backed by s. members and router may be nil, which
-// disables the NODES command and key routing respectively (standalone mode).
-func NewHandler(store store.Store, members *cluster.Members, router *cluster.Router) *Handler {
+// NewHandler returns a Handler backed by s. members, router, and coordinator may be
+// nil, which disables NODES, key routing, and replication respectively (standalone).
+func NewHandler(store store.Store, members *cluster.Members, router *cluster.Router, coordinator *Coordinator) *Handler {
 	return &Handler{
-		store:   store,
-		members: members,
-		router:  router,
+		store:       store,
+		members:     members,
+		router:      router,
+		coordinator: coordinator,
 	}
 }
 
@@ -112,6 +116,15 @@ func (h *Handler) Handle(cmd protocol.Command) protocol.Value {
 			if owner, ok := h.router.Owner(key); ok {
 				return protocol.Error("MOVED " + owner)
 			}
+		}
+		// We own this key (no -MOVED above). If replication is on, apply the op to
+		// the local store and let the coordinator drive the N/R/W quorum across the
+		// replica set. (Internal verbs are clusteredOp==false, so they never reach
+		// here — they fall through to the plain local spec.run below, which is what
+		// keeps a replicated write from re-replicating.)
+		if h.coordinator != nil {
+			local := spec.run(h, cmd.Args)
+			return h.coordinator.coordinate(cmd, local)
 		}
 	}
 

@@ -22,7 +22,7 @@ func reply(t *testing.T, s store.Store, name string, args ...string) string {
 		byteArgs[i] = []byte(a)
 	}
 
-	v := NewHandler(s, nil, nil).Handle(protocol.Command{Name: name, Args: byteArgs})
+	v := NewHandler(s, nil, nil, nil).Handle(protocol.Command{Name: name, Args: byteArgs})
 
 	var buf bytes.Buffer
 	if err := v.Encode(&buf); err != nil {
@@ -159,7 +159,7 @@ func TestHandle_Nodes(t *testing.T) {
 	}, time.Now())
 
 	var buf bytes.Buffer
-	v := NewHandler(store.New(), members, nil).Handle(protocol.Command{Name: "NODES"})
+	v := NewHandler(store.New(), members, nil, nil).Handle(protocol.Command{Name: "NODES"})
 	if err := v.Encode(&buf); err != nil {
 		t.Fatalf("Encode reply: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestHandle_Redirect(t *testing.T) {
 	// A long interval + no Start: NewRouter builds the ring once and we never rebuild.
 	router := cluster.NewRouter(m, 50, time.Hour)
 
-	h := NewHandler(store.New(), m, router)
+	h := NewHandler(store.New(), m, router, nil)
 
 	send := func(key string) string {
 		var buf bytes.Buffer
@@ -233,7 +233,7 @@ func TestHandle_InternalOps(t *testing.T) {
 	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1})
 	m.Merge([]cluster.Node{{ID: "b", Addr: "b", State: cluster.Alive, Incarnation: 1}}, time.Now())
 	router := cluster.NewRouter(m, 50, time.Hour)
-	h := NewHandler(store.New(), m, router)
+	h := NewHandler(store.New(), m, router, nil)
 
 	send := func(name string, args ...string) string {
 		byteArgs := make([][]byte, len(args))
@@ -272,5 +272,49 @@ func TestHandle_InternalOps(t *testing.T) {
 	}
 	if got := send("RGET", remoteKey); got != "$-1\r\n" {
 		t.Errorf("RGET after RDEL = %q, want a null bulk $-1", got)
+	}
+}
+
+// TestHandle_CoordinatesLocalWrite: when this node owns the key and a coordinator is
+// present, Handle applies the write locally AND drives the quorum — the value lands
+// in the local store and is fanned out to the peers. (W=3 makes gather wait for both
+// peers, so the replication counts are race-free to assert.)
+func TestHandle_CoordinatesLocalWrite(t *testing.T) {
+	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1})
+	m.Merge([]cluster.Node{
+		{ID: "b", Addr: "b", State: cluster.Alive, Incarnation: 1},
+		{ID: "c", Addr: "c", State: cluster.Alive, Incarnation: 1},
+	}, time.Now())
+	router := cluster.NewRouter(m, 50, time.Hour)
+
+	peer := newFakeReplicator() // every replica acks
+	coord := NewCoordinator("a", router, peer, 3, 2, 3)
+	st := store.New()
+	h := NewHandler(st, m, router, coord)
+
+	// A key this node owns, so Handle coordinates instead of redirecting.
+	var localKey string
+	for i := 0; ; i++ {
+		k := fmt.Sprintf("key-%d", i)
+		if router.IsLocal(k) {
+			localKey = k
+			break
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := h.Handle(protocol.Command{Name: "SET", Args: [][]byte{[]byte(localKey), []byte("v")}}).Encode(&buf); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if got := buf.String(); got != "+OK\r\n" {
+		t.Errorf("SET of an owned key = %q, want +OK (quorum met)", got)
+	}
+	// Applied locally.
+	if v, ok := st.Get(localKey); !ok || string(v) != "v" {
+		t.Errorf("local store after SET = (%q, %v), want (\"v\", true)", v, ok)
+	}
+	// Fanned out to both peers.
+	if peer.replicated["b"] != 1 || peer.replicated["c"] != 1 {
+		t.Errorf("replicated = b:%d c:%d, want 1 each (fanned out to both peers)", peer.replicated["b"], peer.replicated["c"])
 	}
 }

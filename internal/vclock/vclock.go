@@ -49,30 +49,29 @@ func (c Clock) Compare(other Clock) Order {
 	// Walk the union of node IDs (a key missing from one side reads as 0): c is ahead
 	// if it has any higher counter, other is ahead if it does. Ahead on both sides
 	// means the histories diverged — concurrent.
-	cAhead, otherAhead := false, false
-	for n, cnt := range c {
-		if cnt > other[n] {
-			cAhead = true
-		}
-	}
+	cAhead := c.aheadOf(other)
+	otherAhead := other.aheadOf(c)
 
-	for n, cnt := range other {
-		if cnt > c[n] {
-			otherAhead = true
-		}
-	}
-
-	if !cAhead && !otherAhead {
+	switch {
+	case cAhead && otherAhead:
+		return Concurrent
+	case cAhead:
+		return After
+	case otherAhead:
+		return Before
+	default:
 		return Equal
 	}
+}
 
-	if cAhead && !otherAhead {
-		return After
+// aheadOf reports whether c has any node whose counter exceeds other's — treating a
+// node missing from other as 0. It returns on the first such node rather than
+// scanning the whole clock.
+func (c Clock) aheadOf(other Clock) bool {
+	for n, cnt := range c {
+		if cnt > other[n] {
+			return true
+		}
 	}
-
-	if !cAhead && otherAhead {
-		return Before
-	}
-
-	return Concurrent
+	return false
 }

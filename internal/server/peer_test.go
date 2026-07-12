@@ -7,29 +7,38 @@ import (
 	"time"
 
 	"github.com/Bernardo-FMF/kyria/internal/store"
+	"github.com/Bernardo-FMF/kyria/internal/vclock"
+	"github.com/Bernardo-FMF/kyria/internal/version"
 )
 
-// TestPeer_Replication drives the peer client against a real server: Set/Get/Del
-// over a socket, exercising the internal RSET/RGET/RDEL verbs end to end.
+// versionBlob encodes value as a single-version RSET payload — what a coordinator
+// sends after minting a clock.
+func versionBlob(value string) []byte {
+	return version.Encode([]version.Version{{Value: []byte(value), Clock: vclock.Clock{"n1": 1}}})
+}
+
+// rset replicates a versioned write of value under key to the peer at addr.
+func (p *Peer) rsetTest(addr, key, value string) error {
+	return p.Replicate(addr, rset, [][]byte{[]byte(key), versionBlob(value)})
+}
+
+// TestPeer_Replication drives the peer client against a real server: a versioned
+// RSET, an RGET that returns the stored blob, and an RDEL — over a socket, end to end.
 func TestPeer_Replication(t *testing.T) {
 	srv := startServer(t)
 	addr := srv.Addr().String()
 	peer := NewPeer(2 * time.Second)
 
-	// Set then Get round-trips the value.
-	if err := peer.Set(addr, "k", []byte("v"), 0); err != nil {
-		t.Fatalf("Set: %v", err)
+	if err := peer.rsetTest(addr, "k", "v"); err != nil {
+		t.Fatalf("RSET: %v", err)
 	}
-	if got, found, err := peer.Get(addr, "k"); err != nil || !found || string(got) != "v" {
-		t.Fatalf("Get after Set = (%q, %v, %v), want (\"v\", true, nil)", got, found, err)
+	// Get returns the stored sibling blob; decode it back to the value.
+	got, found, err := peer.Get(addr, "k")
+	if err != nil || !found {
+		t.Fatalf("Get after RSET = (found %v, err %v), want found", found, err)
 	}
-
-	// A TTL'd Set (the PX path) is readable before it expires.
-	if err := peer.Set(addr, "t", []byte("x"), time.Hour); err != nil {
-		t.Fatalf("Set with ttl: %v", err)
-	}
-	if got, found, _ := peer.Get(addr, "t"); !found || string(got) != "x" {
-		t.Errorf("Get of a TTL'd key = (%q, %v), want (\"x\", true)", got, found)
+	if vs, err := version.Decode(got); err != nil || len(vs) != 1 || string(vs[0].Value) != "v" {
+		t.Fatalf("decoded RGET = %v (err %v), want [v]", vs, err)
 	}
 
 	// Del removes it; a subsequent Get is a clean miss.
@@ -48,16 +57,16 @@ func TestPeer_ReusesConnection(t *testing.T) {
 	addr := srv.Addr().String()
 	peer := NewPeer(2 * time.Second)
 
-	if err := peer.Set(addr, "k", []byte("v"), 0); err != nil {
-		t.Fatalf("first Set: %v", err)
+	if err := peer.rsetTest(addr, "k", "v"); err != nil {
+		t.Fatalf("first RSET: %v", err)
 	}
 	if got := len(peer.idle[addr]); got != 1 {
 		t.Fatalf("idle conns after 1 call = %d, want 1 (conn returned to the pool)", got)
 	}
 	first := peer.idle[addr][0]
 
-	if err := peer.Set(addr, "k2", []byte("v"), 0); err != nil {
-		t.Fatalf("second Set: %v", err)
+	if err := peer.rsetTest(addr, "k2", "v"); err != nil {
+		t.Fatalf("second RSET: %v", err)
 	}
 	if got := len(peer.idle[addr]); got != 1 {
 		t.Fatalf("idle conns after 2 calls = %d, want 1 (reused, not a fresh dial)", got)
@@ -75,8 +84,8 @@ func TestPeer_DiscardsBrokenConnection(t *testing.T) {
 	peer := NewPeer(2 * time.Second)
 
 	// Prime the pool with one healthy connection.
-	if err := peer.Set(addr, "k", []byte("v"), 0); err != nil {
-		t.Fatalf("priming Set: %v", err)
+	if err := peer.rsetTest(addr, "k", "v"); err != nil {
+		t.Fatalf("priming RSET: %v", err)
 	}
 	if got := len(peer.idle[addr]); got != 1 {
 		t.Fatalf("idle conns after priming = %d, want 1", got)
@@ -86,8 +95,8 @@ func TestPeer_DiscardsBrokenConnection(t *testing.T) {
 	srv.Close()
 
 	// The next op reuses the dead conn, fails, and must discard it — not repool it.
-	if err := peer.Set(addr, "k", []byte("v"), 0); err == nil {
-		t.Error("Set over a dead pooled conn = nil error, want a failure")
+	if err := peer.rsetTest(addr, "k", "v"); err == nil {
+		t.Error("RSET over a dead pooled conn = nil error, want a failure")
 	}
 	if got := len(peer.idle[addr]); got != 0 {
 		t.Errorf("idle conns after a failed op = %d, want 0 (broken conn discarded)", got)
@@ -118,12 +127,12 @@ func TestPeer_ConcurrentUse(t *testing.T) {
 			defer wg.Done()
 			key := fmt.Sprintf("k-%d", i)
 			for j := 0; j < 50; j++ {
-				if err := peer.Set(addr, key, []byte("v"), 0); err != nil {
-					t.Errorf("Set: %v", err)
+				if err := peer.rsetTest(addr, key, "v"); err != nil {
+					t.Errorf("RSET: %v", err)
 					return
 				}
-				if got, found, err := peer.Get(addr, key); err != nil || !found || string(got) != "v" {
-					t.Errorf("Get = (%q, %v, %v), want (v, true, nil)", got, found, err)
+				if _, found, err := peer.Get(addr, key); err != nil || !found {
+					t.Errorf("Get = (found %v, err %v), want found", found, err)
 					return
 				}
 			}

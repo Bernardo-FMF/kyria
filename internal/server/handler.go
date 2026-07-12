@@ -12,6 +12,7 @@ import (
 	"github.com/Bernardo-FMF/kyria/internal/cluster"
 	"github.com/Bernardo-FMF/kyria/internal/protocol"
 	"github.com/Bernardo-FMF/kyria/internal/store"
+	"github.com/Bernardo-FMF/kyria/internal/version"
 )
 
 // Command words kyria understands. Handle matches them case-insensitively.
@@ -58,11 +59,12 @@ var commands = map[string]commandSpec{
 	del:   {1, 1, true, (*Handler).del},
 	nodes: {0, 0, false, (*Handler).nodes},
 
-	// The internal replica verbs reuse the get/set/del methods (identical local-store
-	// ops) but with clusteredOp:false, so Handle skips routing — no -MOVED bounce back
-	// to the coordinator, no re-replication.
+	// Internal replica verbs (clusteredOp:false → Handle skips routing). rset carries
+	// a VERSIONED blob {key, versionBlob} and reconciles it into the replica's sibling
+	// set — its own method. rget and rdel reuse get/del: both just touch the raw stored
+	// bytes, since it's the coordinator (not the read verb) that decodes + reconciles.
 	rget: {1, 1, false, (*Handler).get},
-	rset: {2, 4, false, (*Handler).set},
+	rset: {2, 2, false, (*Handler).rset},
 	rdel: {1, 1, false, (*Handler).del},
 }
 
@@ -117,14 +119,13 @@ func (h *Handler) Handle(cmd protocol.Command) protocol.Value {
 				return protocol.Error("MOVED " + owner)
 			}
 		}
-		// We own this key (no -MOVED above). If replication is on, apply the op to
-		// the local store and let the coordinator drive the N/R/W quorum across the
-		// replica set. (Internal verbs are clusteredOp==false, so they never reach
-		// here — they fall through to the plain local spec.run below, which is what
-		// keeps a replicated write from re-replicating.)
+		// We own this key (no -MOVED above). If replication is on, hand the whole op
+		// to the coordinator: it does the versioned local apply AND drives the N/R/W
+		// quorum across the replica set. (Internal verbs are clusteredOp==false, so
+		// they never reach here — they fall through to the plain local spec.run below,
+		// which is what keeps a replicated write from re-replicating.)
 		if h.coordinator != nil {
-			local := spec.run(h, cmd.Args)
-			return h.coordinator.coordinate(cmd, local)
+			return h.coordinator.coordinate(cmd)
 		}
 	}
 
@@ -197,6 +198,28 @@ func (h *Handler) del(args [][]byte) protocol.Value {
 	}
 
 	return protocol.Integer(int64(intVal))
+}
+
+// rset applies a replicated write: args are [key, versionBlob], where versionBlob
+// encodes the single incoming Version (value + clock) the coordinator computed. It
+// reconciles that version into the key's stored sibling set under the store's lock,
+// never re-incrementing the clock or re-replicating. Reply +OK.
+func (h *Handler) rset(args [][]byte) protocol.Value {
+	incoming, err := version.Decode(args[1])
+	if err != nil || len(incoming) != 1 {
+		return protocol.Error("ERR malformed version")
+	}
+
+	_, err = h.store.Update(string(args[0]), func(old []byte) []byte {
+		existing, _ := version.Decode(old)
+		return version.Encode(version.Reconcile(existing, incoming[0]))
+	})
+
+	if err != nil {
+		return protocol.Error("ERR " + err.Error())
+	}
+
+	return protocol.SimpleString("OK")
 }
 
 // nodes replies with the cluster's live membership — one bulk string per alive

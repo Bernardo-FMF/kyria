@@ -10,6 +10,8 @@ import (
 	"github.com/Bernardo-FMF/kyria/internal/cluster"
 	"github.com/Bernardo-FMF/kyria/internal/protocol"
 	"github.com/Bernardo-FMF/kyria/internal/store"
+	"github.com/Bernardo-FMF/kyria/internal/vclock"
+	"github.com/Bernardo-FMF/kyria/internal/version"
 )
 
 // reply dispatches a command against s and returns the RESP-encoded reply as a
@@ -225,29 +227,42 @@ func TestHandle_Redirect(t *testing.T) {
 	}
 }
 
-// TestHandle_InternalOps: the internal replica verbs (RSET/RGET/RDEL) act on the
-// LOCAL store and bypass routing — a coordinator uses them to place a copy on a
-// node that isn't the key's owner. A client GET of the same key redirects, but RSET
-// stores it right here.
-func TestHandle_InternalOps(t *testing.T) {
+// TestHandle_VersionedReplicaVerbs: the internal verbs bypass routing (a client GET
+// of a non-owned key redirects, but RSET/RGET act locally) and store VERSIONED blobs
+// — RSET reconciles an incoming version into the sibling set, RGET returns the encoded
+// set, a higher-clock RSET supersedes the earlier version, and RDEL drops the key.
+func TestHandle_VersionedReplicaVerbs(t *testing.T) {
 	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1})
 	m.Merge([]cluster.Node{{ID: "b", Addr: "b", State: cluster.Alive, Incarnation: 1}}, time.Now())
 	router := cluster.NewRouter(m, 50, time.Hour)
 	h := NewHandler(store.New(), m, router, nil)
 
-	send := func(name string, args ...string) string {
-		byteArgs := make([][]byte, len(args))
-		for i, a := range args {
-			byteArgs[i] = []byte(a)
-		}
+	send := func(name string, args ...[]byte) protocol.Value {
+		return h.Handle(protocol.Command{Name: name, Args: args})
+	}
+	wire := func(v protocol.Value) string {
 		var buf bytes.Buffer
-		if err := h.Handle(protocol.Command{Name: name, Args: byteArgs}).Encode(&buf); err != nil {
+		if err := v.Encode(&buf); err != nil {
 			t.Fatalf("Encode: %v", err)
 		}
 		return buf.String()
 	}
+	blobOf := func(value string, clock vclock.Clock) []byte {
+		return version.Encode([]version.Version{{Value: []byte(value), Clock: clock}})
+	}
+	siblings := func(key string) []version.Version {
+		blob, ok := send("RGET", []byte(key)).AsBulk()
+		if !ok {
+			t.Fatalf("RGET %q returned no blob", key)
+		}
+		vs, err := version.Decode(blob)
+		if err != nil {
+			t.Fatalf("Decode RGET blob: %v", err)
+		}
+		return vs
+	}
 
-	// A key this node does not own — the premise: a client op here would redirect.
+	// A key this node does not own — a client GET of it redirects...
 	var remoteKey string
 	for i := 0; ; i++ {
 		k := fmt.Sprintf("key-%d", i)
@@ -256,22 +271,32 @@ func TestHandle_InternalOps(t *testing.T) {
 			break
 		}
 	}
-	if got := send("GET", remoteKey); !strings.HasPrefix(got, "-MOVED") {
+	if got := wire(send("GET", []byte(remoteKey))); !strings.HasPrefix(got, "-MOVED") {
 		t.Fatalf("client GET of a non-owned key = %q, want -MOVED (test premise)", got)
 	}
 
-	// The internal verbs act locally regardless of ownership.
-	if got := send("RSET", remoteKey, "val"); got != "+OK\r\n" {
-		t.Errorf("RSET of a non-owned key = %q, want +OK (stored locally, no redirect)", got)
+	// ...but RSET of a versioned blob is stored locally, no redirect.
+	if got := wire(send("RSET", []byte(remoteKey), blobOf("v1", vclock.Clock{"a": 1}))); got != "+OK\r\n" {
+		t.Errorf("RSET v1 = %q, want +OK", got)
 	}
-	if got := send("RGET", remoteKey); got != "$3\r\nval\r\n" {
-		t.Errorf("RGET after RSET = %q, want the stored value $3\\r\\nval", got)
+	if vs := siblings(remoteKey); len(vs) != 1 || string(vs[0].Value) != "v1" {
+		t.Errorf("after RSET v1, RGET = %v, want [v1]", vs)
 	}
-	if got := send("RDEL", remoteKey); got != ":1\r\n" {
-		t.Errorf("RDEL of the stored key = %q, want :1", got)
+
+	// A higher clock supersedes — still one version, now v2.
+	if got := wire(send("RSET", []byte(remoteKey), blobOf("v2", vclock.Clock{"a": 2}))); got != "+OK\r\n" {
+		t.Errorf("RSET v2 = %q, want +OK", got)
 	}
-	if got := send("RGET", remoteKey); got != "$-1\r\n" {
-		t.Errorf("RGET after RDEL = %q, want a null bulk $-1", got)
+	if vs := siblings(remoteKey); len(vs) != 1 || string(vs[0].Value) != "v2" {
+		t.Errorf("after superseding RSET, RGET = %v, want just [v2]", vs)
+	}
+
+	// RDEL drops the key entirely.
+	if got := wire(send("RDEL", []byte(remoteKey))); got != ":1\r\n" {
+		t.Errorf("RDEL = %q, want :1", got)
+	}
+	if got := wire(send("RGET", []byte(remoteKey))); got != "$-1\r\n" {
+		t.Errorf("RGET after RDEL = %q, want a null bulk", got)
 	}
 }
 
@@ -288,8 +313,8 @@ func TestHandle_CoordinatesLocalWrite(t *testing.T) {
 	router := cluster.NewRouter(m, 50, time.Hour)
 
 	peer := newFakeReplicator() // every replica acks
-	coord := NewCoordinator("a", router, peer, 3, 2, 3)
 	st := store.New()
+	coord := NewCoordinator("a", router, st, peer, 3, 2, 3)
 	h := NewHandler(st, m, router, coord)
 
 	// A key this node owns, so Handle coordinates instead of redirecting.
@@ -309,9 +334,13 @@ func TestHandle_CoordinatesLocalWrite(t *testing.T) {
 	if got := buf.String(); got != "+OK\r\n" {
 		t.Errorf("SET of an owned key = %q, want +OK (quorum met)", got)
 	}
-	// Applied locally.
-	if v, ok := st.Get(localKey); !ok || string(v) != "v" {
-		t.Errorf("local store after SET = (%q, %v), want (\"v\", true)", v, ok)
+	// Applied locally as a versioned blob.
+	blob, ok := st.Get(localKey)
+	if !ok {
+		t.Fatal("local store missing the key after SET")
+	}
+	if vs, err := version.Decode(blob); err != nil || len(vs) != 1 || string(vs[0].Value) != "v" {
+		t.Errorf("local version after SET = %v (err %v), want a single version [v]", vs, err)
 	}
 	// Fanned out to both peers.
 	if peer.replicated["b"] != 1 || peer.replicated["c"] != 1 {

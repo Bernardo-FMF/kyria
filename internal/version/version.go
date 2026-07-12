@@ -47,6 +47,19 @@ func Reconcile(existing []Version, incoming Version) []Version {
 	return result
 }
 
+// Frontier returns the causal frontier of a sibling set — the merge (pointwise max)
+// of every version's clock. A coordinator increments the writer's counter on this to
+// mint a clock that descends all current siblings, so the new write supersedes and
+// collapses them. An empty set has an empty (nil) frontier.
+func Frontier(versions []Version) vclock.Clock {
+	var merged vclock.Clock
+	for _, v := range versions {
+		merged = v.Clock.Merge(merged)
+	}
+
+	return merged
+}
+
 // Encode serializes a sibling set into the opaque bytes the store holds under a key.
 // Encoding can't fail (node IDs never exceed a uint16, values fit a uint32 length),
 // so there is no error return.

@@ -1,6 +1,7 @@
 package version
 
 import (
+	"maps"
 	"reflect"
 	"testing"
 
@@ -62,6 +63,21 @@ func TestReconcile_Siblings(t *testing.T) {
 	set := valueSet(got)
 	if len(got) != 2 || !set["x"] || !set["y"] {
 		t.Errorf("Reconcile of concurrent writes = %v, want siblings [x, y]", set)
+	}
+}
+
+// TestFrontier: the frontier is the pointwise-max join of every sibling's clock —
+// so a write incrementing it descends them all.
+func TestFrontier(t *testing.T) {
+	versions := []Version{
+		{Value: []byte("a"), Clock: vclock.Clock{"n1": 2, "n2": 1}},
+		{Value: []byte("b"), Clock: vclock.Clock{"n1": 1, "n3": 5}},
+	}
+	if got := Frontier(versions); !maps.Equal(got, vclock.Clock{"n1": 2, "n2": 1, "n3": 5}) {
+		t.Errorf("Frontier = %v, want {n1:2, n2:1, n3:5}", got)
+	}
+	if got := Frontier(nil); len(got) != 0 {
+		t.Errorf("Frontier(nil) = %v, want empty", got)
 	}
 }
 

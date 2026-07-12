@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"errors"
 	"net"
-	"strconv"
 	"sync"
 	"time"
 
@@ -41,27 +40,6 @@ func NewPeer(timeout time.Duration) *Peer {
 		timeout: timeout,
 		idle:    make(map[string][]*pooledConn),
 	}
-}
-
-// Set replicates a write to the replica at addr via RSET, propagating a TTL as PX
-// milliseconds when ttl > 0. It returns nil on the replica's +OK, or an error if the
-// dial/IO fails or the replica replies -ERR.
-func (p *Peer) Set(addr, key string, value []byte, ttl time.Duration) error {
-	args := [][]byte{[]byte(rset), []byte(key), value}
-	if ttl > 0 {
-		args = append(args, []byte(ttlPx), []byte(strconv.FormatInt(ttl.Milliseconds(), 10)))
-	}
-
-	reply, err := p.do(addr, args...)
-	if err != nil {
-		return err
-	}
-	msg, ok := reply.AsError()
-	if ok {
-		return errors.New(msg)
-	}
-
-	return nil
 }
 
 // Get reads key from the replica at addr via RGET, returning (value, found). A null

@@ -66,7 +66,7 @@ func main() {
 		// The replica set is talked to over the client port, so the coordinator's
 		// "self" is this node's ID (its client address), matching what the ring returns.
 		peer = server.NewPeer(cfg.ReplicaTimeout)
-		coordinator = server.NewCoordinator(self.ID, router, peer, cfg.ReplicationFactor, cfg.ReadQuorum, cfg.WriteQuorum)
+		coordinator = server.NewCoordinator(self.ID, router, st, peer, cfg.ReplicationFactor, cfg.ReadQuorum, cfg.WriteQuorum)
 
 		log.Printf("gossip listening on %s", addr)
 	}

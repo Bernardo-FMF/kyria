@@ -130,7 +130,7 @@ func (m *MapStore) Set(key string, value []byte) (bool, error) {
 // atomic within a single goroutine; ShardedStore holds the key's lock across the
 // whole call to make it atomic under concurrency.
 func (m *MapStore) Update(key string, fn func(old []byte) []byte) (bool, error) {
-	old, _ := m.Get(key) // absent key → old == nil
+	old, _ := m.Get(key) // absent key: old == nil
 	return m.Set(key, fn(old))
 }
 

@@ -4,7 +4,9 @@
 // reconciliation layer must keep as siblings rather than silently dropping.
 package vclock
 
-import "maps"
+import (
+	"maps"
+)
 
 // Clock maps a node ID to its logical counter. A node not present reads as counter 0,
 // so the zero value (a nil map) is a valid empty clock.

@@ -60,6 +60,30 @@ func Frontier(versions []Version) vclock.Clock {
 	return merged
 }
 
+// Equal reports whether two sibling sets hold the same versions, regardless of order.
+// Read-repair uses it to skip replicas that already have the reconciled result. Sibling
+// sets are tiny (usually a single version), so a nested scan beats a map's allocation;
+// and because a reconciled set has no duplicates, equal length plus a ⊆ b implies the
+// sets are equal.
+func Equal(a, b []Version) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for _, va := range a {
+		found := false
+		for _, vb := range b {
+			if bytes.Equal(va.Value, vb.Value) && va.Clock.Compare(vb.Clock) == vclock.Equal {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
 // Encode serializes a sibling set into the opaque bytes the store holds under a key.
 // Encoding can't fail (node IDs never exceed a uint16, values fit a uint32 length),
 // so there is no error return.

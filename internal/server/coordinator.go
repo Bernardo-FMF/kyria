@@ -109,9 +109,12 @@ func (c *Coordinator) delete(key string) protocol.Value {
 	return quorumError("delete", acks, need)
 }
 
+// peerResult carries one replica's decoded sibling set back to the read loop. addr
+// keys it into the responders map so read-repair can tell who returned what.
 type peerResult struct {
 	versions []version.Version
 	ok       bool
+	addr     string
 }
 
 // read gathers R sibling sets for key (the local one counts as one), reconciles them,
@@ -125,6 +128,13 @@ func (c *Coordinator) read(key string) protocol.Value {
 	merged, _ := version.Decode(blob)
 	responses := 1
 
+	// responders records each replica's set exactly as it was read, so read-repair can
+	// push merged back to the ones that lagged. Seeding self with merged captures the
+	// local decode: Reconcile reassigns merged to fresh slices below, so this entry
+	// keeps pointing at self's original set. Only replicas that actually respond are
+	// recorded — a failed peer's state is unknown, so it's never repaired blindly.
+	responders := map[string][]version.Version{c.self: merged}
+
 	if responses < need {
 		peers := peersExcept(replicas, c.self)
 		results := make(chan peerResult, len(peers))
@@ -137,7 +147,7 @@ func (c *Coordinator) read(key string) protocol.Value {
 					return
 				}
 				v, err := version.Decode(d)
-				results <- peerResult{versions: v, ok: err == nil}
+				results <- peerResult{versions: v, ok: err == nil, addr: addr}
 			}(addr)
 		}
 
@@ -153,6 +163,10 @@ func (c *Coordinator) read(key string) protocol.Value {
 			}
 
 			responses++
+			// Record the responder's raw set before folding it in — here in the main
+			// loop, so building responders never races the peer goroutines.
+			responders[res.addr] = res.versions
+
 			for _, v := range res.versions {
 				merged = version.Reconcile(merged, v)
 			}
@@ -163,10 +177,44 @@ func (c *Coordinator) read(key string) protocol.Value {
 		return quorumError("read", responses, need)
 	}
 
+	// Quorum met and merged is final — heal the laggards off the read path so it never
+	// delays the reply. The responses > 1 guard skips the single-responder fast path,
+	// where self already IS merged and there's nothing to repair.
+	if responses > 1 {
+		go c.readRepair(key, merged, responders)
+	}
+
 	if len(merged) == 0 {
 		return protocol.BulkString(nil)
 	}
 	return protocol.BulkString(merged[0].Value)
+}
+
+// readRepair heals replicas that returned a set behind the reconciled result. For each
+// responder whose set differs from merged, it pushes merged back — the local node
+// updates its own store, a peer gets an RSET per version. It's meant to run off the
+// read path (in a goroutine): best-effort, and must never delay the client reply.
+func (c *Coordinator) readRepair(key string, merged []version.Version, responders map[string][]version.Version) {
+	for addr, set := range responders {
+		if version.Equal(set, merged) {
+			continue
+		}
+
+		if addr == c.self {
+			c.store.Update(key, func(old []byte) []byte {
+				existing, _ := version.Decode(old)
+				for _, v := range merged {
+					existing = version.Reconcile(existing, v)
+				}
+				return version.Encode(existing)
+			})
+			continue
+		}
+
+		for _, v := range merged {
+			c.peer.Replicate(addr, rset, [][]byte{[]byte(key), version.Encode([]version.Version{v})})
+		}
+	}
 }
 
 // gather runs op against each peer concurrently and returns the ack count — starting

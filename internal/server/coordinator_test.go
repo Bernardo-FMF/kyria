@@ -196,3 +196,83 @@ func TestCoordinator_ReadMiss(t *testing.T) {
 		t.Errorf("read of an absent key = %q, want a null bulk $-1", got)
 	}
 }
+
+// TestCoordinator_ReadTriggersReadRepair: a real read (not a direct readRepair call)
+// must kick off the async repair. Self holds a stale version, peer b holds the newer
+// one, peer c responds with an empty set (a miss). With R=3 the read waits for all
+// three, reconciles to "new", and then — off the read path — heals the laggards: self
+// via its local store, the stale peer c via an RSET, while the current peer b is skipped.
+func TestCoordinator_ReadTriggersReadRepair(t *testing.T) {
+	peer := newFakeReplicator()
+	peer.blobs["b"] = verBlob("new", vclock.Clock{"a": 2}) // b already current
+	// c is absent from blobs → Get returns an empty set: a responder that's behind.
+	// A ShardedStore (not a bare MapStore) because the async readRepair writes the
+	// store while this test's polling loop reads it — per-shard locks make that safe.
+	s := store.NewSharded(4)
+	s.Set("k", verBlob("old", vclock.Clock{"a": 1})) // self is stale
+	c := newTestCoordinator(s, peer, 3, 3, 2)        // R=3 → the read waits for all three
+
+	if got := encodeReply(t, c.coordinate(getCmd("k"))); got != "$3\r\nnew\r\n" {
+		t.Fatalf("read = %q, want the reconciled $3\\r\\nnew", got)
+	}
+
+	// Read-repair runs in a goroutine, so poll (with a timeout) until it converges:
+	// the stale peer c pushed an RSET and self's local store healed to "new".
+	deadline := time.Now().Add(time.Second)
+	for {
+		peer.mu.Lock()
+		pushedB, pushedC := peer.replicated["b"], peer.replicated["c"]
+		peer.mu.Unlock()
+
+		blob, _ := s.Get("k")
+		vs, _ := version.Decode(blob)
+		selfHealed := len(vs) == 1 && string(vs[0].Value) == "new"
+
+		if pushedC > 0 && selfHealed {
+			if pushedB != 0 {
+				t.Errorf("up-to-date peer b was repaired %d times, want 0", pushedB)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("read-repair never converged: c pushed=%d, self healed=%v", pushedC, selfHealed)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestCoordinator_ReadRepair: readRepair pushes the reconciled set back to replicas
+// that were behind — the local store gets updated, a stale peer gets an RSET — and it
+// skips a replica that already holds the result. (Called synchronously here; in the
+// read path it runs in a goroutine.)
+func TestCoordinator_ReadRepair(t *testing.T) {
+	peer := newFakeReplicator()
+	s := store.New()
+	s.Set("k", verBlob("old", vclock.Clock{"a": 1})) // self locally holds the stale version
+	c := newTestCoordinator(s, peer, 3, 2, 2)
+
+	merged := []version.Version{{Value: []byte("new"), Clock: vclock.Clock{"a": 2}}}
+	responders := map[string][]version.Version{
+		"a": {{Value: []byte("old"), Clock: vclock.Clock{"a": 1}}}, // self, stale
+		"b": {{Value: []byte("new"), Clock: vclock.Clock{"a": 2}}}, // already current → skip
+		"c": nil,                                                   // never had it → stale
+	}
+
+	c.readRepair("k", merged, responders)
+
+	// self (a) was stale → its local store now holds the reconciled version.
+	blob, ok := s.Get("k")
+	if !ok {
+		t.Fatal("self was not repaired")
+	}
+	if vs, _ := version.Decode(blob); len(vs) != 1 || string(vs[0].Value) != "new" {
+		t.Errorf("self after repair = %v, want the reconciled [new]", vs)
+	}
+	// b was current → not pushed; c was stale → pushed.
+	if peer.replicated["b"] != 0 {
+		t.Errorf("up-to-date peer b was repaired %d times, want 0", peer.replicated["b"])
+	}
+	if peer.replicated["c"] == 0 {
+		t.Error("stale peer c was not repaired")
+	}
+}

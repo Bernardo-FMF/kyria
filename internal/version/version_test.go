@@ -66,6 +66,29 @@ func TestReconcile_Siblings(t *testing.T) {
 	}
 }
 
+// TestEqual: sibling-set equality is order-independent and distinguishes value and
+// clock differences.
+func TestEqual(t *testing.T) {
+	x := Version{Value: []byte("x"), Clock: vclock.Clock{"n1": 1}}
+	y := Version{Value: []byte("y"), Clock: vclock.Clock{"n2": 1}}
+
+	if !Equal([]Version{x, y}, []Version{y, x}) {
+		t.Error("same versions in a different order should be Equal")
+	}
+	if !Equal(nil, nil) {
+		t.Error("two empty sets should be Equal")
+	}
+	if Equal([]Version{x, y}, []Version{x}) {
+		t.Error("different lengths should not be Equal")
+	}
+	if Equal([]Version{x}, []Version{{Value: []byte("x"), Clock: vclock.Clock{"n1": 2}}}) {
+		t.Error("same value but different clock should not be Equal")
+	}
+	if Equal([]Version{x}, []Version{{Value: []byte("z"), Clock: vclock.Clock{"n1": 1}}}) {
+		t.Error("same clock but different value should not be Equal")
+	}
+}
+
 // TestFrontier: the frontier is the pointwise-max join of every sibling's clock —
 // so a write incrementing it descends them all.
 func TestFrontier(t *testing.T) {

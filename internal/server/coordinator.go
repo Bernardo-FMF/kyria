@@ -25,17 +25,27 @@ type replicator interface {
 // versioned write out to the replica set and waits for a quorum: W acks for a write,
 // R responses for a read.
 type Coordinator struct {
-	self    string          // this node's ID/addr, excluded from the peer fan-out
-	router  *cluster.Router // resolves a key to its N-node replica set
-	store   store.Store     // this node's local store (holds versioned blobs)
-	peer    replicator      // sends internal ops to the other replicas
-	n, r, w int             // replication factor, read quorum, write quorum
+	self   string          // this node's ID/addr, excluded from the peer fan-out
+	router *cluster.Router // resolves a key to its N-node replica set
+	store  store.Store     // this node's local store (holds versioned blobs)
+	peer   replicator      // sends internal ops to the other replicas
+	// TODO(11c-ii): add a `hints *hintStore` field. write() parks a hint here for any
+	// replica whose fan-out Replicate fails, so the HintReplayer can deliver it once
+	// that replica recovers. It's the SAME hintStore instance the replayer drains —
+	// main builds one and hands it to both NewCoordinator and NewHintReplayer.
+	hints   *hintStore
+	n, r, w int // replication factor, read quorum, write quorum
 }
 
 // NewCoordinator returns a Coordinator over the local store, with replica set size n
 // and read/write quorums r/w. self is this node's client address, excluded from fan-out.
-func NewCoordinator(self string, router *cluster.Router, store store.Store, peer replicator, n, r, w int) *Coordinator {
-	return &Coordinator{self: self, router: router, store: store, peer: peer, n: n, r: r, w: w}
+//
+// TODO(11c-ii): take a `hints *hintStore` param (suggested position: after peer, before
+// n) and assign it to the new field. main builds the hintStore once (server.NewHintStore)
+// and passes the SAME instance here and to server.NewHintReplayer. This changes the
+// signature, so the test helper (newTestCoordinator) and main.go's call must both update.
+func NewCoordinator(self string, router *cluster.Router, store store.Store, peer replicator, hints *hintStore, n, r, w int) *Coordinator {
+	return &Coordinator{self: self, router: router, store: store, peer: peer, hints: hints, n: n, r: r, w: w}
 }
 
 // coordinate applies a clustered client op end to end: the versioned local apply plus
@@ -76,8 +86,23 @@ func (c *Coordinator) write(key string, value []byte) protocol.Value {
 	replicas := c.router.Owners(key, c.n)
 	need := min(c.w, len(replicas))
 
+	// TODO(11c-ii): park a hint whenever a fan-out Replicate FAILS, so a write that met
+	// quorum isn't lost to a down replica. Rewrite the gather op below to: attempt
+	// c.peer.Replicate(addr, rset, {key, blob}); on a non-nil error, c.hints.add(addr,
+	// key, blob) and return false; on nil, return true. Things to keep in mind:
+	//   - parking runs INSIDE the gather goroutine, so it's async relative to write
+	//     returning — a hint can land just after the client gets +OK (tests must poll).
+	//   - every down peer gets a hint, even once quorum is already met, because all
+	//     gather goroutines run to completion (they still send on the buffered channel).
+	//   - the parked blob is the exact rset payload, so the replayer redelivers it verbatim.
+	//   - DELETE does NOT park hints yet — hinted delete needs tombstones (see backlog).
 	acks := c.gather(peersExcept(replicas, c.self), need, func(addr string) bool {
-		return c.peer.Replicate(addr, rset, [][]byte{[]byte(key), blob}) == nil
+		err := c.peer.Replicate(addr, rset, [][]byte{[]byte(key), blob})
+		if err != nil {
+			c.hints.add(addr, key, blob)
+			return false
+		}
+		return true
 	})
 
 	if acks >= need {

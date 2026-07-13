@@ -63,7 +63,7 @@ func newTestCoordinator(s store.Store, peer replicator, n, r, w int) *Coordinato
 		{ID: "c", Addr: "c", State: cluster.Alive, Incarnation: 1},
 	}, time.Now())
 	router := cluster.NewRouter(m, 50, time.Hour)
-	return NewCoordinator("a", router, s, peer, n, r, w)
+	return NewCoordinator("a", router, s, peer, NewHintStore(), n, r, w)
 }
 
 func setCmd(key, value string) protocol.Command {
@@ -136,6 +136,39 @@ func TestCoordinator_WriteFailsLocallyNotReplicated(t *testing.T) {
 	}
 	if len(peer.replicated) != 0 {
 		t.Errorf("a write that failed locally was replicated to %v, want no fan-out", peer.replicated)
+	}
+}
+
+// TestCoordinator_WriteParksHintForDownReplica: a write that meets quorum with one
+// replica down still returns +OK, and the unreachable replica gets a parked hint so the
+// write isn't lost — while the replica that acked gets none. Parking happens inside a
+// fan-out goroutine (async vs the reply), so the hint is observed by polling.
+func TestCoordinator_WriteParksHintForDownReplica(t *testing.T) {
+	peer := newFakeReplicator()
+	peer.fail["b"] = true // b is down; self + c still make W=2
+	c := newTestCoordinator(store.New(), peer, 3, 2, 2)
+
+	if got := encodeReply(t, c.coordinate(setCmd("k", "v"))); got != "+OK\r\n" {
+		t.Fatalf("write with one replica down = %q, want +OK", got)
+	}
+
+	// The failed replica's hint is parked asynchronously — poll until it lands.
+	deadline := time.Now().Add(time.Second)
+	for {
+		snap := c.hints.snapshot()
+		if blob, ok := snap["b"]["k"]; ok {
+			if vs, _ := version.Decode(blob); len(vs) != 1 || string(vs[0].Value) != "v" {
+				t.Errorf("parked hint for b = %v, want a single version [v]", vs)
+			}
+			if _, hinted := snap["c"]; hinted {
+				t.Error("replica c acked but was still given a hint")
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no hint parked for the down replica b: %v", snap)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

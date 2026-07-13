@@ -13,24 +13,25 @@ import (
 // It is deliberately plain data: parseFlags fills it, storeOptions turns it into
 // store.Options, and main reads Addr. Keeping it here leaves main.go to wiring.
 type Config struct {
-	Addr              string        // TCP listen address, e.g. ":6379"
-	Shards            int           // number of lock-striped shards (concurrency)
-	Eviction          string        // "none" | "lru" | "lfu" | "tinylfu"
-	MaxEntries        int           // PER-SHARD entry cap; 0 = unbounded (no eviction)
-	MaxValueSize      int           // max value bytes; 0 = store default
-	MaxKeySize        int           // max key bytes; 0 = store default
-	ReapInterval      time.Duration // active expiry sweep interval; 0 disables the janitor
-	GossipAddr        string        // UDP gossip address; empty = standalone (no clustering)
-	Seeds             string        // comma-separated seed peer addresses to bootstrap from
-	GossipInterval    time.Duration // gossip round interval; 0 = engine default
-	FailTimeout       time.Duration // mark a peer dead after this long silent; 0 = engine default
-	Fanout            int           // peers to gossip per round; 0 = engine default
-	Replicas          int           // virtual nodes per physical node on the hash ring
-	RebuildInterval   time.Duration // how often the router rebuilds the ring from membership
-	ReplicationFactor int           // N: how many nodes hold each key
-	ReadQuorum        int           // R: responses a read waits for
-	WriteQuorum       int           // W: acks a write waits for
-	ReplicaTimeout    time.Duration // per-op dial+IO timeout to a replica
+	Addr                 string        // TCP listen address, e.g. ":6379"
+	Shards               int           // number of lock-striped shards (concurrency)
+	Eviction             string        // "none" | "lru" | "lfu" | "tinylfu"
+	MaxEntries           int           // PER-SHARD entry cap; 0 = unbounded (no eviction)
+	MaxValueSize         int           // max value bytes; 0 = store default
+	MaxKeySize           int           // max key bytes; 0 = store default
+	ReapInterval         time.Duration // active expiry sweep interval; 0 disables the janitor
+	GossipAddr           string        // UDP gossip address; empty = standalone (no clustering)
+	Seeds                string        // comma-separated seed peer addresses to bootstrap from
+	GossipInterval       time.Duration // gossip round interval; 0 = engine default
+	FailTimeout          time.Duration // mark a peer dead after this long silent; 0 = engine default
+	Fanout               int           // peers to gossip per round; 0 = engine default
+	Replicas             int           // virtual nodes per physical node on the hash ring
+	RebuildInterval      time.Duration // how often the router rebuilds the ring from membership
+	ReplicationFactor    int           // N: how many nodes hold each key
+	ReadQuorum           int           // R: responses a read waits for
+	WriteQuorum          int           // W: acks a write waits for
+	ReplicaTimeout       time.Duration // per-op dial+IO timeout to a replica
+	HintReplayerInterval time.Duration
 }
 
 // parseFlags parses args (typically os.Args[1:]) into a Config using a local
@@ -58,30 +59,32 @@ func parseFlags(args []string) (Config, error) {
 	readQuorum := fs.Int("read-quorum", 2, "responses a read waits for (R)")
 	writeQuorum := fs.Int("write-quorum", 2, "acks a write waits for (W)")
 	replicaTimeout := fs.Duration("replica-timeout", 2*time.Second, "per-op timeout talking to a replica")
+	hintReplayerInterval := fs.Duration("hint-replayer-interval", time.Second, "how often hints are replayed to other replicas")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
 
 	cfg := Config{
-		Addr:              *addr,
-		Shards:            *shards,
-		Eviction:          *eviction,
-		MaxEntries:        *maxEntries,
-		MaxValueSize:      *maxValueSize,
-		MaxKeySize:        *maxKeySize,
-		ReapInterval:      *reapInterval,
-		GossipAddr:        *gossipAddr,
-		Seeds:             *seeds,
-		GossipInterval:    *gossipInterval,
-		FailTimeout:       *failTimeout,
-		Fanout:            *fanout,
-		Replicas:          *replicas,
-		RebuildInterval:   *rebuildInterval,
-		ReplicationFactor: *replicationFactor,
-		ReadQuorum:        *readQuorum,
-		WriteQuorum:       *writeQuorum,
-		ReplicaTimeout:    *replicaTimeout,
+		Addr:                 *addr,
+		Shards:               *shards,
+		Eviction:             *eviction,
+		MaxEntries:           *maxEntries,
+		MaxValueSize:         *maxValueSize,
+		MaxKeySize:           *maxKeySize,
+		ReapInterval:         *reapInterval,
+		GossipAddr:           *gossipAddr,
+		Seeds:                *seeds,
+		GossipInterval:       *gossipInterval,
+		FailTimeout:          *failTimeout,
+		Fanout:               *fanout,
+		Replicas:             *replicas,
+		RebuildInterval:      *rebuildInterval,
+		ReplicationFactor:    *replicationFactor,
+		ReadQuorum:           *readQuorum,
+		WriteQuorum:          *writeQuorum,
+		ReplicaTimeout:       *replicaTimeout,
+		HintReplayerInterval: *hintReplayerInterval,
 	}
 
 	switch cfg.Eviction {

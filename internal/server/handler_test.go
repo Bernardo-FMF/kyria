@@ -314,7 +314,7 @@ func TestHandle_CoordinatesLocalWrite(t *testing.T) {
 
 	peer := newFakeReplicator() // every replica acks
 	st := store.New()
-	coord := NewCoordinator("a", router, st, peer, 3, 2, 3)
+	coord := NewCoordinator("a", router, st, peer, NewHintStore(), 3, 2, 3)
 	h := NewHandler(st, m, router, coord)
 
 	// A key this node owns, so Handle coordinates instead of redirecting.

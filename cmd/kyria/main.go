@@ -44,6 +44,10 @@ func main() {
 	// mode, which leaves NewServer with a nil coordinator (replication off).
 	var peer *server.Peer
 	var coordinator *server.Coordinator
+	// TODO(11c-ii): add `var replayer *server.HintReplayer` here, at this scope, so the
+	// shutdown block below can Stop() it (like janitor/router/peer). Stays nil in
+	// standalone mode — no replication means no hints to replay.
+	var replayer *server.HintReplayer
 	if cfg.GossipAddr != "" {
 		conn, err := net.ListenPacket("udp", cfg.GossipAddr)
 		if err != nil {
@@ -66,7 +70,19 @@ func main() {
 		// The replica set is talked to over the client port, so the coordinator's
 		// "self" is this node's ID (its client address), matching what the ring returns.
 		peer = server.NewPeer(cfg.ReplicaTimeout)
-		coordinator = server.NewCoordinator(self.ID, router, st, peer, cfg.ReplicationFactor, cfg.ReadQuorum, cfg.WriteQuorum)
+		// TODO(11c-ii): build the shared hint store and wire both ends of handoff:
+		//   hints := server.NewHintStore()
+		//   coordinator = server.NewCoordinator(self.ID, router, st, peer, hints, N, R, W)  // hints param added
+		//   replayer = server.NewHintReplayer(hints, peer, <interval>)  // starts the replay goroutine
+		// For <interval>, the idiomatic move is a `-hint-replay-interval` flag mirroring
+		// -reap-interval (Config field + flag + assembly + the config_test want-literals);
+		// or hardcode time.Second for now (add a "time" import) and promote it to a flag
+		// later. Either way NewHintReplayer starts a goroutine that MUST be Stop()ed below.
+
+		hints := server.NewHintStore()
+		coordinator = server.NewCoordinator(self.ID, router, st, peer, hints, cfg.ReplicationFactor, cfg.ReadQuorum, cfg.WriteQuorum)
+
+		replayer = server.NewHintReplayer(hints, peer, cfg.HintReplayerInterval)
 
 		log.Printf("gossip listening on %s", addr)
 	}
@@ -95,9 +111,17 @@ func main() {
 		if router != nil {
 			router.Stop() // end the background ring-rebuild loop
 		}
+		// TODO(11c-ii): stop the hint replayer here, BEFORE peer.Close() — the replayer
+		// delivers hints over `peer`, so drain its goroutine before releasing the
+		// connections it uses:  if replayer != nil { replayer.Stop() }
+		if replayer != nil {
+			replayer.Stop()
+		}
+
 		if peer != nil {
 			peer.Close() // release pooled replica connections
 		}
+
 		if err := srv.Close(); err != nil {
 			log.Printf("close: %v", err)
 		}

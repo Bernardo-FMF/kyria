@@ -15,6 +15,8 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"math/bits"
+
+	"github.com/Bernardo-FMF/kyria/internal/binenc"
 )
 
 // Tree is a Merkle tree over a set of (key, blob) pairs, laid out as a perfect binary
@@ -148,6 +150,59 @@ func (t *Tree) collect(other *Tree, start int, diffs *[]int) {
 
 	t.collect(other, 2*start, diffs)
 	t.collect(other, (2*start)+1, diffs)
+}
+
+// Encode serializes the tree's leaf hashes, prefixed by the leaf count, so a peer can send it
+// over the wire for Diff. Only the leaves are shipped: the internal nodes are derived, and
+// Diff/Root rebuild them, so sending them would just double the payload. Each leaf is a uint32
+// length followed by that many bytes; a nil (empty) leaf is a zero length.
+func (t *Tree) Encode() []byte {
+	buf := new(bytes.Buffer)
+
+	binenc.PutUint32(buf, uint32(t.leafCount))
+	for l := t.leafCount; l < 2*t.leafCount; l++ {
+		leaf := t.nodes[l]
+		binenc.PutUint32(buf, uint32(len(leaf)))
+		buf.Write(leaf)
+	}
+
+	return buf.Bytes()
+}
+
+// Decode reconstructs a tree from Encode's bytes: a Tree with its leaf count and leaf hashes
+// populated, its internal nodes left nil for Diff/Root to rebuild. It parses defensively, since
+// the bytes arrive over the network — a short or corrupt blob yields binenc.ErrMalformed rather
+// than a panic.
+func Decode(b []byte) (*Tree, error) {
+	leafCount, cursor, err := binenc.Uint32(b, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	tree := &Tree{
+		leafCount: int(leafCount),
+		nodes:     make([][]byte, leafCount*2),
+	}
+
+	var leafSize uint32
+	var leaf []byte
+	for l := range leafCount {
+		leafSize, cursor, err = binenc.Uint32(b, cursor)
+		if err != nil {
+			return nil, err
+		}
+		if leafSize == 0 {
+			leaf = nil
+		} else {
+			leaf, cursor, err = binenc.Bytes(b, cursor, int(leafSize))
+			if err != nil {
+				return nil, err
+			}
+		}
+		tree.nodes[leafCount+l] = leaf
+	}
+
+	return tree, nil
 }
 
 // nextPowerOfTwo returns the smallest power of two >= n (and 1 for n <= 1).

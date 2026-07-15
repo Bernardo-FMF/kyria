@@ -263,3 +263,18 @@ func (m *MapStore) Delete(key string) bool {
 func (m *MapStore) Size() int {
 	return len(m.data)
 }
+
+// Range calls fn for every live entry, skipping any that have expired (lazy expiry as in
+// Get: an expired entry is passed over, not deleted — reclamation is the janitor's job).
+// It takes no lock; MapStore is the single-threaded core, and ShardedStore.Range supplies
+// the per-shard lock. The value passed to fn aliases internal storage, so fn must only read it.
+func (m *MapStore) Range(fn func(key string, value []byte)) {
+	now := time.Now()
+	for k, e := range m.data {
+		if e.expired(now) {
+			continue
+		}
+
+		fn(k, e.value)
+	}
+}

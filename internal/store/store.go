@@ -53,4 +53,10 @@ type Store interface {
 	Delete(key string) (deleted bool)
 	// Size reports the number of entries currently stored.
 	Size() int
+
+	// Range calls fn for every live entry currently stored, skipping expired-but-unreaped
+	// ones (the same view as Get). The value passed to fn aliases internal storage — fn
+	// must only read it, never mutate it — and, under ShardedStore, runs while a shard lock
+	// is held, so fn must not call back into the store.
+	Range(fn func(key string, value []byte))
 }

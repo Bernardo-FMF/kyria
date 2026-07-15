@@ -137,3 +137,17 @@ func (s *ShardedStore) Size() int {
 
 	return size
 }
+
+// Range calls fn for every live entry across all shards, one shard at a time: each shard is
+// held under its read lock only while its own entries are visited, so writes to other shards
+// proceed during the sweep, and the per-iteration closure releases the lock even if fn
+// panics. fn runs under a shard's read lock, so it must not call back into the store.
+func (s *ShardedStore) Range(fn func(key string, value []byte)) {
+	for _, shard := range s.shards {
+		func() {
+			shard.mu.RLock()
+			defer shard.mu.RUnlock()
+			shard.store.Range(fn)
+		}()
+	}
+}

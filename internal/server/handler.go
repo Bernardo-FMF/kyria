@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Bernardo-FMF/kyria/internal/cluster"
+	"github.com/Bernardo-FMF/kyria/internal/merkle"
 	"github.com/Bernardo-FMF/kyria/internal/protocol"
 	"github.com/Bernardo-FMF/kyria/internal/store"
 	"github.com/Bernardo-FMF/kyria/internal/version"
@@ -28,6 +29,10 @@ const (
 	rget = "RGET"
 	rset = "RSET"
 	rdel = "RDEL"
+
+	// rtree is the anti-entropy verb: RTREE <leafCount> asks a node to build a Merkle tree
+	// over its local store at that leaf count and reply with tree.Encode().
+	rtree = "RTREE"
 )
 
 const (
@@ -66,6 +71,9 @@ var commands = map[string]commandSpec{
 	rget: {1, 1, false, (*Handler).get},
 	rset: {2, 2, false, (*Handler).rset},
 	rdel: {1, 1, false, (*Handler).del},
+
+	// rtree serves this node's local Merkle tree for anti-entropy; keyless, so no routing.
+	rtree: {1, 1, false, (*Handler).rtree},
 }
 
 // Handler executes parsed commands against a store and returns RESP replies. It
@@ -234,4 +242,21 @@ func (h *Handler) nodes(args [][]byte) protocol.Value {
 		elems = append(elems, protocol.BulkString(fmt.Appendf(nil, "%s %s", n.ID, n.Addr)))
 	}
 	return protocol.Array(elems...)
+}
+
+// rtree serves the anti-entropy RTREE verb: it builds a Merkle tree over this node's local
+// store at the requested leaf count and returns it encoded. The responder never diffs — it
+// just serves its tree; the requesting node decodes it and runs the comparison.
+func (h *Handler) rtree(args [][]byte) protocol.Value {
+	leafCount, err := strconv.Atoi(string(args[0]))
+	if err != nil {
+		return protocol.Error("ERR failed to parse tree leaf count")
+	}
+
+	t := merkle.New(leafCount)
+	h.store.Range(func(key string, value []byte) {
+		t.Add(key, value)
+	})
+
+	return protocol.BulkString(t.Encode())
 }

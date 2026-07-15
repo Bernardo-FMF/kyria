@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"errors"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/Bernardo-FMF/kyria/internal/merkle"
 	"github.com/Bernardo-FMF/kyria/internal/protocol"
 )
 
@@ -91,6 +93,25 @@ func (p *Peer) Replicate(addr, verb string, args [][]byte) error {
 		return errors.New(msg)
 	}
 	return nil
+}
+
+// Tree fetches the peer at addr's Merkle tree via RTREE and decodes it into a *merkle.Tree
+// ready to Diff. leaves is the cluster's fixed leaf count, forwarded so the peer builds a tree
+// comparable to the caller's local one. An -ERR reply or a malformed tree becomes an error.
+func (p *Peer) Tree(addr string, leaves int) (*merkle.Tree, error) {
+	args := [][]byte{[]byte(rtree), []byte(strconv.Itoa(leaves))}
+
+	reply, err := p.do(addr, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	if msg, ok := reply.AsError(); ok {
+		return nil, errors.New(msg)
+	}
+
+	blob, _ := reply.AsBulk()
+	return merkle.Decode(blob)
 }
 
 // do sends args as a RESP command to addr and returns the decoded reply over a

@@ -50,6 +50,15 @@ func PutString(buf *bytes.Buffer, value string) error {
 	return nil
 }
 
+// PutBool appends value as a single byte: 1 for true, 0 for false. Bool decodes it.
+func PutBool(buf *bytes.Buffer, value bool) {
+	var b byte
+	if value {
+		b = 1
+	}
+	buf.WriteByte(b)
+}
+
 // Uint16 reads a big-endian uint16 at off, returning it and the advanced offset — or
 // ErrMalformed if fewer than 2 bytes remain.
 func Uint16(data []byte, off int) (uint16, int, error) {
@@ -100,4 +109,18 @@ func Bytes(data []byte, off, n int) ([]byte, int, error) {
 	b := make([]byte, n)
 	copy(b, data[off:off+n])
 	return b, off + n, nil
+}
+
+// Bool reads a single 0/1 byte at off, returning it as a bool and the advanced
+// offset — or ErrMalformed if no bytes remain or the byte isn't 0 or 1.
+func Bool(data []byte, off int) (bool, int, error) {
+	if len(data)-off < 1 {
+		return false, off, ErrMalformed
+	}
+	b := data[off]
+	if b != 0 && b != 1 {
+		return false, off, ErrMalformed
+	}
+
+	return b == 1, off + 1, nil
 }

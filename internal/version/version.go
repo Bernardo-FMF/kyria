@@ -15,9 +15,16 @@ import (
 // Version is one value of a key together with the vector clock stamping its causal
 // history. A key may hold several concurrent Versions — siblings — when writes race,
 // which is how vector clocks avoid silently dropping a conflicting update.
+//
+// Deleted marks a tombstone: a version whose value is "gone". It reconciles by clock like any
+// other (a delete mints a superseding clock, so it beats the value it replaces), and the read
+// path treats a winning tombstone as a miss. That's what lets a delete survive a replica that
+// missed it — the tombstone propagates via read-repair / anti-entropy and re-buries the value
+// that would otherwise resurrect.
 type Version struct {
-	Value []byte
-	Clock vclock.Clock
+	Value   []byte
+	Clock   vclock.Clock
+	Deleted bool
 }
 
 // Reconcile folds incoming into the existing sibling set and returns the new set of
@@ -60,6 +67,31 @@ func Frontier(versions []Version) vclock.Clock {
 	return merged
 }
 
+// Tombstone returns a "gone" version stamped with clock and a nil value. coordinator.delete uses
+// it to write a delete as a version with a superseding clock, so it reconciles like any other write
+// and buries the value it replaces.
+func Tombstone(clock vclock.Clock) Version {
+	return Version{
+		Clock:   clock,
+		Deleted: true,
+	}
+}
+
+// Live returns the non-tombstone versions (Deleted == false). The read path calls it on the
+// reconciled set: no live versions ⇒ the key is absent (a miss), even if tombstones remain. A value
+// concurrent with a delete stays Live, so a live write survives a concurrent tombstone.
+func Live(versions []Version) []Version {
+	l := make([]Version, 0, len(versions))
+
+	for _, v := range versions {
+		if !v.Deleted {
+			l = append(l, v)
+		}
+	}
+
+	return l
+}
+
 // Equal reports whether two sibling sets hold the same versions, regardless of order.
 // Read-repair uses it to skip replicas that already have the reconciled result. Sibling
 // sets are tiny (usually a single version), so a nested scan beats a map's allocation;
@@ -72,7 +104,9 @@ func Equal(a, b []Version) bool {
 	for _, va := range a {
 		found := false
 		for _, vb := range b {
-			if bytes.Equal(va.Value, vb.Value) && va.Clock.Compare(vb.Clock) == vclock.Equal {
+			// A value and a tombstone with the same clock are different versions, so Deleted is
+			// part of identity here.
+			if bytes.Equal(va.Value, vb.Value) && va.Clock.Compare(vb.Clock) == vclock.Equal && va.Deleted == vb.Deleted {
 				found = true
 				break
 			}
@@ -93,6 +127,7 @@ func Encode(versions []Version) []byte {
 	for _, v := range versions {
 		binenc.PutUint32(buf, uint32(len(v.Value)))
 		buf.Write(v.Value)
+		binenc.PutBool(buf, v.Deleted)
 
 		binenc.PutUint32(buf, uint32(len(v.Clock)))
 		for n, counter := range v.Clock {
@@ -118,15 +153,20 @@ func Decode(b []byte) ([]Version, error) {
 	}
 
 	results := make([]Version, 0, count)
+	var valueLen, clockN uint32
+	var value []byte
+	var deleted bool
 	for range count {
-		var valueLen, clockN uint32
-		var value []byte
 		if valueLen, cursor, err = binenc.Uint32(b, cursor); err != nil {
 			return nil, err
 		}
 		if value, cursor, err = binenc.Bytes(b, cursor, int(valueLen)); err != nil {
 			return nil, err
 		}
+		if deleted, cursor, err = binenc.Bool(b, cursor); err != nil {
+			return nil, err
+		}
+
 		if clockN, cursor, err = binenc.Uint32(b, cursor); err != nil {
 			return nil, err
 		}
@@ -142,7 +182,8 @@ func Decode(b []byte) ([]Version, error) {
 			}
 			clock[node] = counter
 		}
-		results = append(results, Version{Value: value, Clock: clock})
+
+		results = append(results, Version{Value: value, Clock: clock, Deleted: deleted})
 	}
 	return results, nil
 }

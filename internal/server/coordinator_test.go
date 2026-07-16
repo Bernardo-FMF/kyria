@@ -172,19 +172,73 @@ func TestCoordinator_WriteParksHintForDownReplica(t *testing.T) {
 	}
 }
 
-// TestCoordinator_DeleteQuorumMet: DEL removes the key locally and, with W met, replies
-// :1. (Delete removes the whole key regardless of its versioned content.)
+// TestCoordinator_DeleteQuorumMet: DEL of a live key with W met replies :1 and, crucially, does
+// NOT hard-remove the key — it writes a tombstone in its place. The local blob afterwards is a
+// single "gone" version whose clock ({a:2}) supersedes the value it buried ({a:1}), with nothing
+// left Live. That surviving tombstone is what stops a replica which missed the delete from
+// resurrecting the value via read-repair / anti-entropy.
 func TestCoordinator_DeleteQuorumMet(t *testing.T) {
 	peer := newFakeReplicator()
 	s := store.New()
-	s.Set("k", []byte("anything")) // delete doesn't inspect the content
+	s.Set("k", verBlob("v", vclock.Clock{"a": 1})) // a live versioned value, as write() would store it
 	c := newTestCoordinator(s, peer, 3, 2, 2)
 
 	if got := encodeReply(t, c.coordinate(delCmd("k"))); got != ":1\r\n" {
-		t.Errorf("DEL of an existing key = %q, want :1", got)
+		t.Errorf("DEL of a live key = %q, want :1", got)
 	}
-	if _, ok := s.Get("k"); ok {
-		t.Error("key still present locally after DEL")
+
+	// The key is still present locally — but as a tombstone, not a value.
+	blob, ok := s.Get("k")
+	if !ok {
+		t.Fatal("key was hard-removed after DEL; a tombstone should remain to bury the value")
+	}
+	vs, err := version.Decode(blob)
+	if err != nil || len(vs) != 1 {
+		t.Fatalf("local set after DEL = %v (err %v), want a single tombstone", vs, err)
+	}
+	if !vs[0].Deleted {
+		t.Errorf("local version after DEL = %+v, want Deleted", vs[0])
+	}
+	if live := version.Live(vs); len(live) != 0 {
+		t.Errorf("Live after DEL = %v, want none (the value is buried)", live)
+	}
+	// The tombstone must causally supersede the value it replaced ({a:1} → {a:2}).
+	if vs[0].Clock.Compare(vclock.Clock{"a": 1}) != vclock.After {
+		t.Errorf("tombstone clock = %v, want it to supersede the value's {a:1}", vs[0].Clock)
+	}
+}
+
+// TestCoordinator_DeleteAbsentKey: DEL of a key with nothing live replies :0 — but still lays a
+// tombstone locally. A delete records the "gone" marker even when this node never held the value,
+// so the marker can bury a copy that lives on another replica or arrives later.
+func TestCoordinator_DeleteAbsentKey(t *testing.T) {
+	peer := newFakeReplicator()
+	s := store.New()
+	c := newTestCoordinator(s, peer, 3, 2, 2)
+
+	if got := encodeReply(t, c.coordinate(delCmd("missing"))); got != ":0\r\n" {
+		t.Errorf("DEL of an absent key = %q, want :0", got)
+	}
+	blob, ok := s.Get("missing")
+	if !ok {
+		t.Fatal("no tombstone laid for an absent key; a delete must still record the marker")
+	}
+	if vs, err := version.Decode(blob); err != nil || len(vs) != 1 || !vs[0].Deleted {
+		t.Errorf("local set after DEL of absent key = %v (err %v), want a single tombstone", vs, err)
+	}
+}
+
+// TestCoordinator_DeleteQuorumNotMet: W=3 needs every replica, but one is down, so the delete can't
+// reach write quorum and returns a -ERR — not a silent :0. Same durability contract as a write.
+func TestCoordinator_DeleteQuorumNotMet(t *testing.T) {
+	peer := newFakeReplicator()
+	peer.fail["b"] = true
+	s := store.New()
+	s.Set("k", verBlob("v", vclock.Clock{"a": 1}))
+	c := newTestCoordinator(s, peer, 3, 3, 3)
+
+	if got := encodeReply(t, c.coordinate(delCmd("k"))); !strings.HasPrefix(got, "-ERR") {
+		t.Errorf("DEL with W=3 and one replica down = %q, want a -ERR", got)
 	}
 }
 

@@ -81,8 +81,8 @@ func (c *Coordinator) write(key string, value []byte) protocol.Value {
 	// Fan the write out, parking a hint for any replica we can't reach so a write that still met
 	// quorum isn't lost to a down node — the HintReplayer redelivers it on recovery. Every failed
 	// peer gets a hint (all gather goroutines run to completion), and parking happens inside the
-	// goroutine, so a hint can land just after the client's +OK. (DELETE doesn't park hints yet —
-	// hinted delete needs tombstones; see the backlog.)
+	// goroutine, so a hint can land just after the client's +OK. delete() parks hints the same way
+	// (its tombstone is just another rset), so a delete is equally durable across a down replica.
 	acks := c.gather(peersExcept(replicas, c.self), need, func(addr string) bool {
 		err := c.peer.Replicate(addr, rset, [][]byte{[]byte(key), blob})
 		if err != nil {
@@ -99,22 +99,45 @@ func (c *Coordinator) write(key string, value []byte) protocol.Value {
 	return quorumError("write", acks, need)
 }
 
-// delete removes key locally and fans an RDEL out to the replica set, returning the
-// :1/:0 count once W acks land. (Plain key removal — versioned tombstones are deferred.)
+// delete writes a tombstone for key — a "gone" version stamped with a superseding clock — and fans
+// it out to the replica set like write() does, returning :1 if a live value existed before (else
+// :0) once W acks land. Tombstoning rather than removing the key is what stops a replica that missed
+// the delete from resurrecting the value: the tombstone rides read-repair / anti-entropy and
+// re-buries it. A hint is parked for any replica it can't reach, so a quorum-met delete still lands
+// on a node that recovers later.
 func (c *Coordinator) delete(key string) protocol.Value {
-	deleted := c.store.Delete(key)
+	var newClock vclock.Clock
+	var opState int64
+	_, err := c.store.Update(key, func(old []byte) []byte {
+		existing, _ := version.Decode(old)
+		newClock = version.Frontier(existing).Increment(c.self)
+		if len(version.Live(existing)) > 0 {
+			opState = 1
+		}
+
+		return version.Encode(version.Reconcile(existing,
+			version.Tombstone(newClock)))
+	})
+
+	if err != nil {
+		return protocol.Error("ERR " + err.Error())
+	}
+
+	blob := version.Encode([]version.Version{version.Tombstone(newClock)})
 	replicas := c.router.Owners(key, c.n)
 	need := min(c.w, len(replicas))
 
 	acks := c.gather(peersExcept(replicas, c.self), need, func(addr string) bool {
-		return c.peer.Replicate(addr, rdel, [][]byte{[]byte(key)}) == nil
+		err := c.peer.Replicate(addr, rset, [][]byte{[]byte(key), blob})
+		if err != nil {
+			c.hints.add(addr, key, blob)
+			return false
+		}
+		return true
 	})
 
 	if acks >= need {
-		var opState int64 = 0
-		if deleted {
-			opState = 1
-		}
+
 		return protocol.Integer(opState)
 	}
 
@@ -196,10 +219,14 @@ func (c *Coordinator) read(key string) protocol.Value {
 		go c.readRepair(key, merged, responders)
 	}
 
-	if len(merged) == 0 {
+	// Collapse the reconciled set to what the client sees: a winning tombstone (or an empty set)
+	// reads as a MISS, never as its empty value. Read-repair above ran on the full merged set, so
+	// the tombstone still propagates to laggards — Live only filters the reply.
+	live := version.Live(merged)
+	if len(live) == 0 {
 		return protocol.BulkString(nil)
 	}
-	return protocol.BulkString(merged[0].Value)
+	return protocol.BulkString(live[0].Value)
 }
 
 // readRepair heals replicas that returned a set behind the reconciled result. For each

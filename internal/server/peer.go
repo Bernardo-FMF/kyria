@@ -114,6 +114,26 @@ func (p *Peer) Tree(addr string, leaves int) (*merkle.Tree, error) {
 	return merkle.Decode(blob)
 }
 
+// BucketEntries fetches the peer at addr's (key, blob) entries in the given buckets via RBUCKET,
+// decoding the reply into a map. leaves is the cluster's fixed leaf count; buckets are the ones a
+// Diff flagged. An -ERR reply or a malformed body becomes an error. The caller reconciles each
+// returned entry into its own store.
+func (p *Peer) BucketEntries(addr string, leaves int, buckets []int) (map[string][]byte, error) {
+	args := [][]byte{[]byte(rbucket), []byte(strconv.Itoa(leaves)), encodeBuckets(buckets)}
+
+	reply, err := p.do(addr, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	if msg, ok := reply.AsError(); ok {
+		return nil, errors.New(msg)
+	}
+
+	entries, _ := reply.AsBulk()
+	return decodeEntries(entries)
+}
+
 // do sends args as a RESP command to addr and returns the decoded reply over a
 // pooled connection: a healthy conn goes back to the pool, a failed one is discarded.
 func (p *Peer) do(addr string, args ...[]byte) (protocol.Value, error) {

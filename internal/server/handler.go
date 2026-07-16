@@ -33,6 +33,10 @@ const (
 	// rtree is the anti-entropy verb: RTREE <leafCount> asks a node to build a Merkle tree
 	// over its local store at that leaf count and reply with tree.Encode().
 	rtree = "RTREE"
+
+	// rbucket is the anti-entropy fetch verb: RBUCKET <leafCount> <encodedBuckets> returns the
+	// (key, blob) entries whose bucket is in that set — the entries a diff flagged for repair.
+	rbucket = "RBUCKET"
 )
 
 const (
@@ -74,6 +78,9 @@ var commands = map[string]commandSpec{
 
 	// rtree serves this node's local Merkle tree for anti-entropy; keyless, so no routing.
 	rtree: {1, 1, false, (*Handler).rtree},
+
+	// rbucket serves the entries in a requested bucket set for anti-entropy; keyless, no routing.
+	rbucket: {2, 2, false, (*Handler).rbucket},
 }
 
 // Handler executes parsed commands against a store and returns RESP replies. It
@@ -259,4 +266,35 @@ func (h *Handler) rtree(args [][]byte) protocol.Value {
 	})
 
 	return protocol.BulkString(t.Encode())
+}
+
+// rbucket serves the RBUCKET verb: given a leaf count and an encoded bucket set, it returns this
+// node's (key, blob) entries whose bucket is in that set. It scans the store ONCE, filtering by
+// membership in the requested set — which is why the request carries the whole set of differing
+// buckets rather than one bucket per call.
+func (h *Handler) rbucket(args [][]byte) protocol.Value {
+	leafCount, err := strconv.Atoi(string(args[0]))
+	if err != nil {
+		return protocol.Error("ERR failed to parse tree leaf count")
+	}
+
+	buckets, err := decodeBuckets(args[1])
+	if err != nil {
+		return protocol.Error("ERR malformed bucket set")
+	}
+
+	want := map[int]bool{}
+	for _, b := range buckets {
+		want[b] = true
+	}
+
+	tree := merkle.New(leafCount)
+	entries := map[string][]byte{}
+	h.store.Range(func(key string, value []byte) {
+		if want[tree.Bucket(key)] {
+			entries[key] = value
+		}
+	})
+
+	return protocol.BulkString(encodeEntries(entries))
 }

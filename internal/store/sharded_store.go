@@ -151,3 +151,15 @@ func (s *ShardedStore) Range(fn func(key string, value []byte)) {
 		}()
 	}
 }
+
+// DeleteIf removes key only if pred holds for its current value, holding the key's shard write
+// lock across the whole check-and-delete so no concurrent write lands in between. A missing key
+// is a no-op reporting false. See Store.DeleteIf for the predicate contract.
+func (s *ShardedStore) DeleteIf(key string, pred func(old []byte) bool) bool {
+	shard := s.shardFor(key)
+
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+
+	return shard.store.DeleteIf(key, pred)
+}

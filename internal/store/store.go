@@ -58,4 +58,12 @@ type Store interface {
 	// must only read it, never mutate it — and, under ShardedStore, runs while a shard lock
 	// is held, so fn must not call back into the store.
 	Range(fn func(key string, value []byte))
+	// DeleteIf removes key only when pred reports true for its current value, with the
+	// read of that value and the removal performed as one indivisible step under the key's
+	// lock — so no concurrent write can slip between the check and the delete. A missing key
+	// (absent, or expired-but-unreaped) is a no-op: pred is not consulted and DeleteIf reports
+	// false. pred runs under the key's lock, so it must only read the bytes it is handed and
+	// must not call back into the store. It is the primitive the tombstone GC uses to reap a
+	// key only while doing so is still safe.
+	DeleteIf(key string, pred func(old []byte) bool) (deleted bool)
 }

@@ -247,7 +247,7 @@ func TestCoordinator_DeleteQuorumNotMet(t *testing.T) {
 func TestCoordinator_ReadTombstoneIsMiss(t *testing.T) {
 	peer := newFakeReplicator()
 	s := store.New()
-	s.Set("k", version.Encode([]version.Version{version.Tombstone(vclock.Clock{"a": 1})}))
+	s.Set("k", version.Encode([]version.Version{version.Tombstone(vclock.Clock{"a": 1}, 0)}))
 	c := newTestCoordinator(s, peer, 3, 1, 2)
 
 	if got := encodeReply(t, c.coordinate(getCmd("k"))); got != "$-1\r\n" {
@@ -262,7 +262,7 @@ func TestCoordinator_ReadLiveSiblingSurvivesTombstone(t *testing.T) {
 	s := store.New()
 	s.Set("k", version.Encode([]version.Version{
 		{Value: []byte("v"), Clock: vclock.Clock{"a": 1}},
-		version.Tombstone(vclock.Clock{"b": 1}),
+		version.Tombstone(vclock.Clock{"b": 1}, 0),
 	}))
 	c := newTestCoordinator(s, peer, 3, 1, 2)
 

@@ -278,3 +278,20 @@ func (m *MapStore) Range(fn func(key string, value []byte)) {
 		fn(k, e.value)
 	}
 }
+
+// DeleteIf removes key when pred returns true for its current value, reporting whether it
+// removed it; a missing key short-circuits to false without calling pred. Like the other
+// MapStore methods it takes no lock of its own — ShardedStore.DeleteIf holds the shard's write
+// lock across the whole call, which is what makes the check-and-delete atomic under concurrency.
+func (m *MapStore) DeleteIf(key string, pred func(old []byte) bool) bool {
+	b, ok := m.Get(key)
+	if !ok {
+		return false
+	}
+
+	v := pred(b)
+	if v {
+		return m.Delete(key)
+	}
+	return false
+}

@@ -295,7 +295,7 @@ func TestHandle_VersionedReplicaVerbs(t *testing.T) {
 	// A delete arrives as an RSET of a tombstone with a superseding clock. The replica STORES
 	// it (it does not drop the key), so the marker buries v2 and survives to re-bury any copy
 	// that resurfaces — RGET still returns a blob, now a single Deleted version.
-	tomb := version.Encode([]version.Version{version.Tombstone(vclock.Clock{"a": 3})})
+	tomb := version.Encode([]version.Version{version.Tombstone(vclock.Clock{"a": 3}, 0)})
 	if got := wire(send("RSET", []byte(remoteKey), tomb)); got != "+OK\r\n" {
 		t.Errorf("RSET tombstone = %q, want +OK", got)
 	}

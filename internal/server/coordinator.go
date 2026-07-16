@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Bernardo-FMF/kyria/internal/cluster"
 	"github.com/Bernardo-FMF/kyria/internal/protocol"
@@ -108,6 +109,7 @@ func (c *Coordinator) write(key string, value []byte) protocol.Value {
 func (c *Coordinator) delete(key string) protocol.Value {
 	var newClock vclock.Clock
 	var opState int64
+	deletedAt := time.Now().Unix()
 	_, err := c.store.Update(key, func(old []byte) []byte {
 		existing, _ := version.Decode(old)
 		newClock = version.Frontier(existing).Increment(c.self)
@@ -116,14 +118,14 @@ func (c *Coordinator) delete(key string) protocol.Value {
 		}
 
 		return version.Encode(version.Reconcile(existing,
-			version.Tombstone(newClock)))
+			version.Tombstone(newClock, deletedAt)))
 	})
 
 	if err != nil {
 		return protocol.Error("ERR " + err.Error())
 	}
 
-	blob := version.Encode([]version.Version{version.Tombstone(newClock)})
+	blob := version.Encode([]version.Version{version.Tombstone(newClock, deletedAt)})
 	replicas := c.router.Owners(key, c.n)
 	need := min(c.w, len(replicas))
 

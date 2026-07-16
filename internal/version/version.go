@@ -21,10 +21,16 @@ import (
 // path treats a winning tombstone as a miss. That's what lets a delete survive a replica that
 // missed it — the tombstone propagates via read-repair / anti-entropy and re-buries the value
 // that would otherwise resurrect.
+//
+// DeletedAt is the wall-clock unix time (seconds) at which a tombstone was minted, stamped once by
+// the coordinator and propagated verbatim so every replica agrees on the deadline. It is zero and
+// meaningless unless Deleted; the tombstone GC reaps a key once every tombstone in its set is older
+// than the grace period.
 type Version struct {
-	Value   []byte
-	Clock   vclock.Clock
-	Deleted bool
+	Value     []byte
+	Clock     vclock.Clock
+	Deleted   bool
+	DeletedAt int64
 }
 
 // Reconcile folds incoming into the existing sibling set and returns the new set of
@@ -70,10 +76,11 @@ func Frontier(versions []Version) vclock.Clock {
 // Tombstone returns a "gone" version stamped with clock and a nil value. coordinator.delete uses
 // it to write a delete as a version with a superseding clock, so it reconciles like any other write
 // and buries the value it replaces.
-func Tombstone(clock vclock.Clock) Version {
+func Tombstone(clock vclock.Clock, deletedAt int64) Version {
 	return Version{
-		Clock:   clock,
-		Deleted: true,
+		Clock:     clock,
+		Deleted:   true,
+		DeletedAt: deletedAt,
 	}
 }
 
@@ -128,6 +135,9 @@ func Encode(versions []Version) []byte {
 		binenc.PutUint32(buf, uint32(len(v.Value)))
 		buf.Write(v.Value)
 		binenc.PutBool(buf, v.Deleted)
+		if v.Deleted {
+			binenc.PutUint64(buf, uint64(v.DeletedAt))
+		}
 
 		binenc.PutUint32(buf, uint32(len(v.Clock)))
 		for n, counter := range v.Clock {
@@ -167,6 +177,13 @@ func Decode(b []byte) ([]Version, error) {
 			return nil, err
 		}
 
+		var deletedAt uint64
+		if deleted {
+			if deletedAt, cursor, err = binenc.Uint64(b, cursor); err != nil {
+				return nil, err
+			}
+		}
+
 		if clockN, cursor, err = binenc.Uint32(b, cursor); err != nil {
 			return nil, err
 		}
@@ -183,7 +200,7 @@ func Decode(b []byte) ([]Version, error) {
 			clock[node] = counter
 		}
 
-		results = append(results, Version{Value: value, Clock: clock, Deleted: deleted})
+		results = append(results, Version{Value: value, Clock: clock, Deleted: deleted, DeletedAt: int64(deletedAt)})
 	}
 	return results, nil
 }

@@ -31,7 +31,11 @@ type Config struct {
 	ReadQuorum           int           // R: responses a read waits for
 	WriteQuorum          int           // W: acks a write waits for
 	ReplicaTimeout       time.Duration // per-op dial+IO timeout to a replica
-	HintReplayerInterval time.Duration
+	HintReplayerInterval time.Duration // how often parked hints are replayed
+	// AntiEntropyInterval is how often to Merkle-diff a random peer and reconcile the differing
+	// buckets; 0 disables it. (The Merkle leaf count is a cluster-wide invariant, so it's a
+	// constant in main rather than a flag.)
+	AntiEntropyInterval time.Duration
 }
 
 // parseFlags parses args (typically os.Args[1:]) into a Config using a local
@@ -60,6 +64,7 @@ func parseFlags(args []string) (Config, error) {
 	writeQuorum := fs.Int("write-quorum", 2, "acks a write waits for (W)")
 	replicaTimeout := fs.Duration("replica-timeout", 2*time.Second, "per-op timeout talking to a replica")
 	hintReplayerInterval := fs.Duration("hint-replayer-interval", time.Second, "how often hints are replayed to other replicas")
+	antiEntropyInterval := fs.Duration("anti-entropy-interval", 0, "Merkle anti-entropy sweep interval (0 disables)")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -85,6 +90,7 @@ func parseFlags(args []string) (Config, error) {
 		WriteQuorum:          *writeQuorum,
 		ReplicaTimeout:       *replicaTimeout,
 		HintReplayerInterval: *hintReplayerInterval,
+		AntiEntropyInterval:  *antiEntropyInterval,
 	}
 
 	switch cfg.Eviction {

@@ -16,6 +16,10 @@ import (
 	"github.com/Bernardo-FMF/kyria/internal/store"
 )
 
+// antiEntropyLeaves is the Merkle tree leaf count used for anti-entropy. It's a constant, not a
+// flag, because every node must use the same value or their trees can't be compared.
+const antiEntropyLeaves = 1024
+
 // main parses configuration, builds a concurrency-safe store, and serves RESP
 // over TCP until a shutdown signal (SIGINT/SIGTERM) arrives — at which point it
 // closes the server and drains in-flight connections before exiting. Serve runs
@@ -44,10 +48,10 @@ func main() {
 	// mode, which leaves NewServer with a nil coordinator (replication off).
 	var peer *server.Peer
 	var coordinator *server.Coordinator
-	// TODO(11c-ii): add `var replayer *server.HintReplayer` here, at this scope, so the
-	// shutdown block below can Stop() it (like janitor/router/peer). Stays nil in
-	// standalone mode — no replication means no hints to replay.
+	// replayer and antiEntropy are the two background convergence loops; both stay nil in
+	// standalone mode and are Stop()ed in the shutdown block (they run over `peer`).
 	var replayer *server.HintReplayer
+	var antiEntropy *server.AntiEntropy
 	if cfg.GossipAddr != "" {
 		conn, err := net.ListenPacket("udp", cfg.GossipAddr)
 		if err != nil {
@@ -70,19 +74,17 @@ func main() {
 		// The replica set is talked to over the client port, so the coordinator's
 		// "self" is this node's ID (its client address), matching what the ring returns.
 		peer = server.NewPeer(cfg.ReplicaTimeout)
-		// TODO(11c-ii): build the shared hint store and wire both ends of handoff:
-		//   hints := server.NewHintStore()
-		//   coordinator = server.NewCoordinator(self.ID, router, st, peer, hints, N, R, W)  // hints param added
-		//   replayer = server.NewHintReplayer(hints, peer, <interval>)  // starts the replay goroutine
-		// For <interval>, the idiomatic move is a `-hint-replay-interval` flag mirroring
-		// -reap-interval (Config field + flag + assembly + the config_test want-literals);
-		// or hardcode time.Second for now (add a "time" import) and promote it to a flag
-		// later. Either way NewHintReplayer starts a goroutine that MUST be Stop()ed below.
-
+		// One hint store is shared by the coordinator (parks a hint when a fan-out write can't
+		// reach a replica) and the replayer (delivers parked hints once the replica recovers).
 		hints := server.NewHintStore()
 		coordinator = server.NewCoordinator(self.ID, router, st, peer, hints, cfg.ReplicationFactor, cfg.ReadQuorum, cfg.WriteQuorum)
-
 		replayer = server.NewHintReplayer(hints, peer, cfg.HintReplayerInterval)
+
+		// Anti-entropy is opt-in — a zero interval disables it. When on, the background loop
+		// periodically Merkle-diffs a peer and reconciles the keys that differ.
+		if cfg.AntiEntropyInterval > 0 {
+			antiEntropy = server.NewAntiEntropy(self.ID, st, peer, members, antiEntropyLeaves, cfg.AntiEntropyInterval)
+		}
 
 		log.Printf("gossip listening on %s", addr)
 	}
@@ -111,11 +113,13 @@ func main() {
 		if router != nil {
 			router.Stop() // end the background ring-rebuild loop
 		}
-		// TODO(11c-ii): stop the hint replayer here, BEFORE peer.Close() — the replayer
-		// delivers hints over `peer`, so drain its goroutine before releasing the
-		// connections it uses:  if replayer != nil { replayer.Stop() }
+		// Stop the replayer and anti-entropy loops before peer.Close(): both issue calls over
+		// `peer`, so drain their goroutines before its pooled connections are released.
 		if replayer != nil {
 			replayer.Stop()
+		}
+		if antiEntropy != nil {
+			antiEntropy.Stop()
 		}
 
 		if peer != nil {

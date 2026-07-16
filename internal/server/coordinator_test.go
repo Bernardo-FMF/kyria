@@ -242,6 +242,35 @@ func TestCoordinator_DeleteQuorumNotMet(t *testing.T) {
 	}
 }
 
+// TestCoordinator_ReadTombstoneIsMiss: a GET whose reconciled set is a winning tombstone reads as a
+// MISS (a null bulk), never as the tombstone's empty value. R=1 keeps it a pure local read.
+func TestCoordinator_ReadTombstoneIsMiss(t *testing.T) {
+	peer := newFakeReplicator()
+	s := store.New()
+	s.Set("k", version.Encode([]version.Version{version.Tombstone(vclock.Clock{"a": 1})}))
+	c := newTestCoordinator(s, peer, 3, 1, 2)
+
+	if got := encodeReply(t, c.coordinate(getCmd("k"))); got != "$-1\r\n" {
+		t.Errorf("GET of a tombstoned key = %q, want a null bulk $-1", got)
+	}
+}
+
+// TestCoordinator_ReadLiveSiblingSurvivesTombstone: a live value CONCURRENT with a tombstone (a
+// sibling, not superseded) still reads back — Live drops only tombstones, never a concurrent write.
+func TestCoordinator_ReadLiveSiblingSurvivesTombstone(t *testing.T) {
+	peer := newFakeReplicator()
+	s := store.New()
+	s.Set("k", version.Encode([]version.Version{
+		{Value: []byte("v"), Clock: vclock.Clock{"a": 1}},
+		version.Tombstone(vclock.Clock{"b": 1}),
+	}))
+	c := newTestCoordinator(s, peer, 3, 1, 2)
+
+	if got := encodeReply(t, c.coordinate(getCmd("k"))); got != "$1\r\nv\r\n" {
+		t.Errorf("GET with a live sibling concurrent to a tombstone = %q, want the live value \"v\"", got)
+	}
+}
+
 // TestCoordinator_ReadQuorumMet: R=2 — the local read plus one peer meet the quorum,
 // and the read reconciles across replicas, returning the NEWER version. Here the local
 // copy is stale ({a:1}) and peer b holds the newer one ({a:2}), so the read returns b's.

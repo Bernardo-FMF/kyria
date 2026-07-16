@@ -18,9 +18,9 @@ import (
 const maxIdlePerPeer = 8
 
 // Peer is a small RESP client for node-to-node replication: the coordinator dials a
-// replica's client port and issues the internal RSET/RGET/RDEL verbs, reusing the
-// same protocol codec the server already speaks. It keeps a small pool of warm
-// connections per peer so a fan-out write doesn't pay a TCP handshake every time.
+// replica's client port and issues the internal RSET/RGET verbs, reusing the same
+// protocol codec the server already speaks. It keeps a small pool of warm connections
+// per peer so a fan-out write doesn't pay a TCP handshake every time.
 type Peer struct {
 	timeout time.Duration // dial + I/O deadline per call
 
@@ -62,26 +62,10 @@ func (p *Peer) Get(addr, key string) ([]byte, bool, error) {
 	return value, ok, nil
 }
 
-// Del deletes key on the replica at addr via RDEL. It returns nil on success, or an
-// error on a dial/IO failure or an -ERR reply. (The :0/:1 count isn't inspected —
-// the coordinator only needs the ack.)
-func (p *Peer) Del(addr, key string) error {
-	args := [][]byte{[]byte(rdel), []byte(key)}
-	reply, err := p.do(addr, args...)
-	if err != nil {
-		return err
-	}
-	msg, ok := reply.AsError()
-	if ok {
-		return errors.New(msg)
-	}
-	return nil
-}
-
 // Replicate sends the write command [verb, args...] to the replica at addr and
 // returns nil on its ack, or an error on a dial/IO failure or an -ERR reply. The
-// coordinator uses it to fan a client write out as the internal RSET/RDEL verb,
-// forwarding the client's args (key, value, and any EX/PX) verbatim.
+// coordinator uses it to fan a client write out as the internal RSET verb (a delete
+// rides the same path, as a tombstone), forwarding the client's args verbatim.
 func (p *Peer) Replicate(addr, verb string, args [][]byte) error {
 	all := append([][]byte{[]byte(verb)}, args...)
 	reply, err := p.do(addr, all...)

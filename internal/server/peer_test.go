@@ -23,7 +23,7 @@ func (p *Peer) rsetTest(addr, key, value string) error {
 }
 
 // TestPeer_Replication drives the peer client against a real server: a versioned
-// RSET, an RGET that returns the stored blob, and an RDEL — over a socket, end to end.
+// RSET and an RGET that returns the stored blob — over a socket, end to end.
 func TestPeer_Replication(t *testing.T) {
 	srv := startServer(t)
 	addr := srv.Addr().String()
@@ -39,14 +39,6 @@ func TestPeer_Replication(t *testing.T) {
 	}
 	if vs, err := version.Decode(got); err != nil || len(vs) != 1 || string(vs[0].Value) != "v" {
 		t.Fatalf("decoded RGET = %v (err %v), want [v]", vs, err)
-	}
-
-	// Del removes it; a subsequent Get is a clean miss.
-	if err := peer.Del(addr, "k"); err != nil {
-		t.Fatalf("Del: %v", err)
-	}
-	if _, found, err := peer.Get(addr, "k"); err != nil || found {
-		t.Errorf("Get after Del = (found %v, err %v), want (false, nil)", found, err)
 	}
 }
 

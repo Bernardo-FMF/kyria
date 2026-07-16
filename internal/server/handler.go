@@ -24,11 +24,11 @@ const (
 	del   = "DEL"
 	nodes = "NODES"
 
-	// Internal replica verbs — a coordinator sends these to a replica to store, read,
-	// or delete a key on its LOCAL store, bypassing routing and replication.
+	// Internal replica verbs — a coordinator sends these to a replica to store or read
+	// a key on its LOCAL store, bypassing routing and replication. (A delete is a store:
+	// the coordinator fans its tombstone out as an rset.)
 	rget = "RGET"
 	rset = "RSET"
-	rdel = "RDEL"
 
 	// rtree is the anti-entropy verb: RTREE <leafCount> asks a node to build a Merkle tree
 	// over its local store at that leaf count and reply with tree.Encode().
@@ -70,11 +70,10 @@ var commands = map[string]commandSpec{
 
 	// Internal replica verbs (clusteredOp:false → Handle skips routing). rset carries
 	// a VERSIONED blob {key, versionBlob} and reconciles it into the replica's sibling
-	// set — its own method. rget and rdel reuse get/del: both just touch the raw stored
-	// bytes, since it's the coordinator (not the read verb) that decodes + reconciles.
+	// set — its own method. rget reuses get: it just touches the raw stored bytes, since
+	// it's the coordinator (not the read verb) that decodes + reconciles.
 	rget: {1, 1, false, (*Handler).get},
 	rset: {2, 2, false, (*Handler).rset},
-	rdel: {1, 1, false, (*Handler).del},
 
 	// rtree serves this node's local Merkle tree for anti-entropy; keyless, so no routing.
 	rtree: {1, 1, false, (*Handler).rtree},

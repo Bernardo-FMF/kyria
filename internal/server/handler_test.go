@@ -230,7 +230,8 @@ func TestHandle_Redirect(t *testing.T) {
 // TestHandle_VersionedReplicaVerbs: the internal verbs bypass routing (a client GET
 // of a non-owned key redirects, but RSET/RGET act locally) and store VERSIONED blobs
 // — RSET reconciles an incoming version into the sibling set, RGET returns the encoded
-// set, a higher-clock RSET supersedes the earlier version, and RDEL drops the key.
+// set, a higher-clock RSET supersedes the earlier version, and a tombstone RSET buries
+// it (the replica keeps the tombstone rather than dropping the key).
 func TestHandle_VersionedReplicaVerbs(t *testing.T) {
 	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1})
 	m.Merge([]cluster.Node{{ID: "b", Addr: "b", State: cluster.Alive, Incarnation: 1}}, time.Now())
@@ -291,12 +292,15 @@ func TestHandle_VersionedReplicaVerbs(t *testing.T) {
 		t.Errorf("after superseding RSET, RGET = %v, want just [v2]", vs)
 	}
 
-	// RDEL drops the key entirely.
-	if got := wire(send("RDEL", []byte(remoteKey))); got != ":1\r\n" {
-		t.Errorf("RDEL = %q, want :1", got)
+	// A delete arrives as an RSET of a tombstone with a superseding clock. The replica STORES
+	// it (it does not drop the key), so the marker buries v2 and survives to re-bury any copy
+	// that resurfaces — RGET still returns a blob, now a single Deleted version.
+	tomb := version.Encode([]version.Version{version.Tombstone(vclock.Clock{"a": 3})})
+	if got := wire(send("RSET", []byte(remoteKey), tomb)); got != "+OK\r\n" {
+		t.Errorf("RSET tombstone = %q, want +OK", got)
 	}
-	if got := wire(send("RGET", []byte(remoteKey))); got != "$-1\r\n" {
-		t.Errorf("RGET after RDEL = %q, want a null bulk", got)
+	if vs := siblings(remoteKey); len(vs) != 1 || !vs[0].Deleted {
+		t.Errorf("after RSET tombstone, RGET = %v, want a single tombstone (Deleted)", vs)
 	}
 }
 

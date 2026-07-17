@@ -36,6 +36,12 @@ type Config struct {
 	// buckets; 0 disables it. (The Merkle leaf count is a cluster-wide invariant, so it's a
 	// constant in main rather than a flag.)
 	AntiEntropyInterval time.Duration
+	// TombstoneGrace is how long a tombstone must age before the GC may reap it. It must exceed the
+	// worst-case node downtime + AntiEntropyInterval, or a long-down node resurrects deleted data
+	// when it returns (the Cassandra gc_grace tradeoff). Required (> 0) when TombstoneGCInterval > 0.
+	TombstoneGrace time.Duration
+	// TombstoneGCInterval is how often to sweep the store for reapable tombstones; 0 disables the GC.
+	TombstoneGCInterval time.Duration
 }
 
 // parseFlags parses args (typically os.Args[1:]) into a Config using a local
@@ -65,6 +71,8 @@ func parseFlags(args []string) (Config, error) {
 	replicaTimeout := fs.Duration("replica-timeout", 2*time.Second, "per-op timeout talking to a replica")
 	hintReplayerInterval := fs.Duration("hint-replayer-interval", time.Second, "how often hints are replayed to other replicas")
 	antiEntropyInterval := fs.Duration("anti-entropy-interval", 0, "Merkle anti-entropy sweep interval (0 disables)")
+	tombstoneGrace := fs.Duration("tombstone-grace", 0, "how long a tombstone ages before GC may reap it; required when -tombstone-gc-interval > 0")
+	tombstoneGCInterval := fs.Duration("tombstone-gc-interval", 0, "tombstone GC sweep interval (0 disables)")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -91,6 +99,8 @@ func parseFlags(args []string) (Config, error) {
 		ReplicaTimeout:       *replicaTimeout,
 		HintReplayerInterval: *hintReplayerInterval,
 		AntiEntropyInterval:  *antiEntropyInterval,
+		TombstoneGrace:       *tombstoneGrace,
+		TombstoneGCInterval:  *tombstoneGCInterval,
 	}
 
 	switch cfg.Eviction {
@@ -116,6 +126,13 @@ func parseFlags(args []string) (Config, error) {
 
 	if cfg.WriteQuorum <= 0 || cfg.WriteQuorum > cfg.ReplicationFactor {
 		return Config{}, fmt.Errorf("-write-quorum must be in [1, %d], got %d", cfg.ReplicationFactor, cfg.WriteQuorum)
+	}
+
+	// Tombstone GC: reaping a tombstone before every replica has seen it resurrects the delete, so a
+	// grace period is mandatory whenever the sweep is enabled. (Grace must also exceed max downtime +
+	// the anti-entropy interval, but that's an operational judgement we can't check here.)
+	if cfg.TombstoneGCInterval > 0 && cfg.TombstoneGrace <= 0 {
+		return Config{}, fmt.Errorf("-tombstone-gc-interval needs -tombstone-grace > 0")
 	}
 
 	return cfg, nil

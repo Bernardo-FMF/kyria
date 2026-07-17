@@ -74,6 +74,11 @@ func TestParseFlags(t *testing.T) {
 			args: []string{"-replication-factor", "5", "-read-quorum", "3", "-write-quorum", "4", "-replica-timeout", "1s"},
 			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 5, ReadQuorum: 3, WriteQuorum: 4, ReplicaTimeout: time.Second, HintReplayerInterval: time.Second},
 		},
+		{
+			name: "tombstone gc flags",
+			args: []string{"-tombstone-grace", "24h", "-tombstone-gc-interval", "10s"},
+			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second, HintReplayerInterval: time.Second, TombstoneGrace: 24 * time.Hour, TombstoneGCInterval: 10 * time.Second},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -102,6 +107,7 @@ func TestParseFlags_Errors(t *testing.T) {
 		{"replication-factor below 1", []string{"-replication-factor", "0"}},
 		{"read-quorum above replication-factor", []string{"-read-quorum", "5", "-replication-factor", "3"}},
 		{"write-quorum below 1", []string{"-write-quorum", "0"}},
+		{"tombstone gc without grace", []string{"-tombstone-gc-interval", "10s"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -48,10 +48,12 @@ func main() {
 	// mode, which leaves NewServer with a nil coordinator (replication off).
 	var peer *server.Peer
 	var coordinator *server.Coordinator
-	// replayer and antiEntropy are the two background convergence loops; both stay nil in
-	// standalone mode and are Stop()ed in the shutdown block (they run over `peer`).
+	// replayer, antiEntropy, and tombstoneGC are the background convergence loops; all stay nil in
+	// standalone mode and are Stop()ed in the shutdown block. replayer and antiEntropy run over
+	// `peer`; tombstoneGC runs over the local store, reaping tombstones once they age past grace.
 	var replayer *server.HintReplayer
 	var antiEntropy *server.AntiEntropy
+	var tombstoneGC *server.TombstoneGC
 	if cfg.GossipAddr != "" {
 		conn, err := net.ListenPacket("udp", cfg.GossipAddr)
 		if err != nil {
@@ -86,6 +88,10 @@ func main() {
 			antiEntropy = server.NewAntiEntropy(self.ID, st, peer, members, antiEntropyLeaves, cfg.AntiEntropyInterval)
 		}
 
+		if cfg.TombstoneGCInterval > 0 {
+			tombstoneGC = server.NewTombstoneGC(st, cfg.TombstoneGrace, cfg.TombstoneGCInterval)
+		}
+
 		log.Printf("gossip listening on %s", addr)
 	}
 
@@ -114,12 +120,16 @@ func main() {
 			router.Stop() // end the background ring-rebuild loop
 		}
 		// Stop the replayer and anti-entropy loops before peer.Close(): both issue calls over
-		// `peer`, so drain their goroutines before its pooled connections are released.
+		// `peer`, so drain their goroutines before its pooled connections are released. tombstoneGC
+		// is store-only, so its stop order vs peer.Close doesn't matter — it's grouped here for tidiness.
 		if replayer != nil {
 			replayer.Stop()
 		}
 		if antiEntropy != nil {
 			antiEntropy.Stop()
+		}
+		if tombstoneGC != nil {
+			tombstoneGC.Stop()
 		}
 
 		if peer != nil {

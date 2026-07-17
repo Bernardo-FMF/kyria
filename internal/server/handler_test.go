@@ -10,6 +10,7 @@ import (
 	"github.com/Bernardo-FMF/kyria/internal/cluster"
 	"github.com/Bernardo-FMF/kyria/internal/protocol"
 	"github.com/Bernardo-FMF/kyria/internal/store"
+	"github.com/Bernardo-FMF/kyria/internal/telemetry"
 	"github.com/Bernardo-FMF/kyria/internal/vclock"
 	"github.com/Bernardo-FMF/kyria/internal/version"
 )
@@ -24,7 +25,7 @@ func reply(t *testing.T, s store.Store, name string, args ...string) string {
 		byteArgs[i] = []byte(a)
 	}
 
-	v := NewHandler(s, nil, nil, nil).Handle(protocol.Command{Name: name, Args: byteArgs})
+	v := NewHandler(s, nil, nil, nil, nil).Handle(protocol.Command{Name: name, Args: byteArgs})
 
 	var buf bytes.Buffer
 	if err := v.Encode(&buf); err != nil {
@@ -161,7 +162,7 @@ func TestHandle_Nodes(t *testing.T) {
 	}, time.Now())
 
 	var buf bytes.Buffer
-	v := NewHandler(store.New(), members, nil, nil).Handle(protocol.Command{Name: "NODES"})
+	v := NewHandler(store.New(), members, nil, nil, nil).Handle(protocol.Command{Name: "NODES"})
 	if err := v.Encode(&buf); err != nil {
 		t.Fatalf("Encode reply: %v", err)
 	}
@@ -195,7 +196,7 @@ func TestHandle_Redirect(t *testing.T) {
 	// A long interval + no Start: NewRouter builds the ring once and we never rebuild.
 	router := cluster.NewRouter(m, 50, time.Hour)
 
-	h := NewHandler(store.New(), m, router, nil)
+	h := NewHandler(store.New(), m, router, nil, nil)
 
 	send := func(key string) string {
 		var buf bytes.Buffer
@@ -236,7 +237,7 @@ func TestHandle_VersionedReplicaVerbs(t *testing.T) {
 	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1})
 	m.Merge([]cluster.Node{{ID: "b", Addr: "b", State: cluster.Alive, Incarnation: 1}}, time.Now())
 	router := cluster.NewRouter(m, 50, time.Hour)
-	h := NewHandler(store.New(), m, router, nil)
+	h := NewHandler(store.New(), m, router, nil, nil)
 
 	send := func(name string, args ...[]byte) protocol.Value {
 		return h.Handle(protocol.Command{Name: name, Args: args})
@@ -319,7 +320,7 @@ func TestHandle_CoordinatesLocalWrite(t *testing.T) {
 	peer := newFakeReplicator() // every replica acks
 	st := store.New()
 	coord := NewCoordinator("a", router, st, peer, NewHintStore(), 3, 2, 3)
-	h := NewHandler(st, m, router, coord)
+	h := NewHandler(st, m, router, coord, nil)
 
 	// A key this node owns, so Handle coordinates instead of redirecting.
 	var localKey string
@@ -349,5 +350,64 @@ func TestHandle_CoordinatesLocalWrite(t *testing.T) {
 	// Fanned out to both peers.
 	if peer.replicated["b"] != 1 || peer.replicated["c"] != 1 {
 		t.Errorf("replicated = b:%d c:%d, want 1 each (fanned out to both peers)", peer.replicated["b"], peer.replicated["c"])
+	}
+}
+
+// TestHandle_TelemetryCountsAndStats: Handle records client GET/SET/DEL into telemetry, STATS reports
+// the totals as an INFO-style bulk reply, and an internal RGET is NOT counted as a GET.
+func TestHandle_TelemetryCountsAndStats(t *testing.T) {
+	tel := telemetry.New()
+	h := NewHandler(store.New(), nil, nil, nil, tel)
+
+	h.Handle(protocol.Command{Name: "SET", Args: [][]byte{[]byte("k"), []byte("v")}})
+	h.Handle(protocol.Command{Name: "SET", Args: [][]byte{[]byte("k2"), []byte("v")}})
+	h.Handle(protocol.Command{Name: "GET", Args: [][]byte{[]byte("k")}})
+	h.Handle(protocol.Command{Name: "DEL", Args: [][]byte{[]byte("k")}})
+	h.Handle(protocol.Command{Name: "RGET", Args: [][]byte{[]byte("k2")}}) // internal verb — must not count
+
+	var buf bytes.Buffer
+	if err := h.Handle(protocol.Command{Name: "STATS"}).Encode(&buf); err != nil {
+		t.Fatalf("Encode STATS: %v", err)
+	}
+	got := buf.String()
+	// gets:1 (not 2) proves the RGET was excluded; full lines avoid matching a longer number.
+	for _, want := range []string{"gets:1\r\n", "sets:2\r\n", "deletes:1\r\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("STATS reply %q is missing %q", got, want)
+		}
+	}
+}
+
+// TestHandle_TelemetryCountsClusteredOps: a command that Handle hands to the coordinator (and returns
+// early) is still counted — this guards the recorder's placement above the routing block. Under the
+// old placement (below routing) a coordinated op returned before the counter and was never recorded.
+func TestHandle_TelemetryCountsClusteredOps(t *testing.T) {
+	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1})
+	m.Merge([]cluster.Node{
+		{ID: "b", Addr: "b", State: cluster.Alive, Incarnation: 1},
+		{ID: "c", Addr: "c", State: cluster.Alive, Incarnation: 1},
+	}, time.Now())
+	router := cluster.NewRouter(m, 50, time.Hour)
+
+	peer := newFakeReplicator() // every replica acks
+	st := store.New()
+	coord := NewCoordinator("a", router, st, peer, NewHintStore(), 3, 2, 3)
+	tel := telemetry.New()
+	h := NewHandler(st, m, router, coord, tel)
+
+	// A key this node owns, so Handle takes the coordinator path (returns before spec.run).
+	var localKey string
+	for i := 0; ; i++ {
+		k := fmt.Sprintf("key-%d", i)
+		if router.IsLocal(k) {
+			localKey = k
+			break
+		}
+	}
+
+	h.Handle(protocol.Command{Name: "SET", Args: [][]byte{[]byte(localKey), []byte("v")}})
+
+	if got := tel.Snapshot().Sets; got != 1 {
+		t.Errorf("coordinated SET recorded Sets=%d, want 1 (clustered ops must be counted)", got)
 	}
 }

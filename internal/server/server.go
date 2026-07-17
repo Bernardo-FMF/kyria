@@ -10,6 +10,7 @@ import (
 	"github.com/Bernardo-FMF/kyria/internal/cluster"
 	"github.com/Bernardo-FMF/kyria/internal/protocol"
 	"github.com/Bernardo-FMF/kyria/internal/store"
+	"github.com/Bernardo-FMF/kyria/internal/telemetry"
 )
 
 // Server is kyria's TCP front door: it accepts connections, frames RESP values
@@ -35,22 +36,31 @@ type Server struct {
 	closed bool                  // true once Close has begun
 }
 
-// NewServer returns a Server that dispatches commands against store. Call Listen
+// ServerOptions carries the server's tunables and injected collaborators, bundled into one struct so
+// NewServer's signature stays stable as knobs are added. The zero value is valid: no connection cap,
+// no timeout, and nil telemetry (recording no-ops).
+type ServerOptions struct {
+	MaxConns    int                  // 0 = unlimited
+	ConnTimeout time.Duration        // 0 = no timeout
+	Telemetry   *telemetry.Telemetry // may be nil → recording is a no-op
+}
+
+// NewServer returns a Server that dispatches commands against store, configured by opts. Call Listen
 // then Serve to run it. members, router, and coordinator may be nil (standalone).
-func NewServer(store store.Store, members *cluster.Members, router *cluster.Router, coordinator *Coordinator, maxConns int, connTimeout time.Duration) *Server {
-	handler := NewHandler(store, members, router, coordinator)
+func NewServer(store store.Store, members *cluster.Members, router *cluster.Router, coordinator *Coordinator, opts ServerOptions) *Server {
+	handler := NewHandler(store, members, router, coordinator, opts.Telemetry)
 	conns := make(map[net.Conn]struct{}, 10)
 
 	var sem chan struct{}
-	if maxConns > 0 {
-		sem = make(chan struct{}, maxConns)
+	if opts.MaxConns > 0 {
+		sem = make(chan struct{}, opts.MaxConns)
 	}
 
 	return &Server{
 		handler:     handler,
 		conns:       conns,
 		sem:         sem,
-		connTimeout: connTimeout,
+		connTimeout: opts.ConnTimeout,
 	}
 }
 

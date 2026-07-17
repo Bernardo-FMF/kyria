@@ -14,6 +14,7 @@ import (
 	"github.com/Bernardo-FMF/kyria/internal/cluster"
 	"github.com/Bernardo-FMF/kyria/internal/server"
 	"github.com/Bernardo-FMF/kyria/internal/store"
+	"github.com/Bernardo-FMF/kyria/internal/telemetry"
 )
 
 // antiEntropyLeaves is the Merkle tree leaf count used for anti-entropy. It's a constant, not a
@@ -95,7 +96,13 @@ func main() {
 		log.Printf("gossip listening on %s", addr)
 	}
 
-	srv := server.NewServer(st, members, router, coordinator, cfg.MaxConns, cfg.ConnTimeout)
+	tel := telemetry.New()
+	srvOpts := server.ServerOptions{
+		MaxConns:    cfg.MaxConns,
+		ConnTimeout: cfg.ConnTimeout,
+		Telemetry:   tel,
+	}
+	srv := server.NewServer(st, members, router, coordinator, srvOpts)
 	if err := srv.Listen(cfg.Addr); err != nil {
 		log.Fatalf("failed to bind %s: %v", cfg.Addr, err)
 	}

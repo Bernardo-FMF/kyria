@@ -13,6 +13,7 @@ import (
 	"github.com/Bernardo-FMF/kyria/internal/merkle"
 	"github.com/Bernardo-FMF/kyria/internal/protocol"
 	"github.com/Bernardo-FMF/kyria/internal/store"
+	"github.com/Bernardo-FMF/kyria/internal/telemetry"
 	"github.com/Bernardo-FMF/kyria/internal/version"
 )
 
@@ -37,6 +38,10 @@ const (
 	// rbucket is the anti-entropy fetch verb: RBUCKET <leafCount> <encodedBuckets> returns the
 	// (key, blob) entries whose bucket is in that set — the entries a diff flagged for repair.
 	rbucket = "RBUCKET"
+
+	// stats is the STATS admin verb: it reports this node's telemetry counters (uptime plus the
+	// GET/SET/DEL totals) as an INFO-style bulk reply. Keyless and node-local, so it is never routed.
+	stats = "STATS"
 )
 
 const (
@@ -80,6 +85,9 @@ var commands = map[string]commandSpec{
 
 	// rbucket serves the entries in a requested bucket set for anti-entropy; keyless, no routing.
 	rbucket: {2, 2, false, (*Handler).rbucket},
+
+	// stats reports this node's telemetry counters; keyless, so no routing.
+	stats: {0, 0, false, (*Handler).stats},
 }
 
 // Handler executes parsed commands against a store and returns RESP replies. It
@@ -94,16 +102,20 @@ type Handler struct {
 	// coordinator drives N/R/W replication for clustered ops. nil in standalone (or
 	// when replication is off), where Handle serves clustered ops locally, no quorum.
 	coordinator *Coordinator
+	// telemetry records per-command counters for the STATS verb. May be nil — the Record calls are
+	// no-ops on a nil receiver — which is how standalone construction and tests skip instrumentation.
+	telemetry *telemetry.Telemetry
 }
 
 // NewHandler returns a Handler backed by s. members, router, and coordinator may be
 // nil, which disables NODES, key routing, and replication respectively (standalone).
-func NewHandler(store store.Store, members *cluster.Members, router *cluster.Router, coordinator *Coordinator) *Handler {
+func NewHandler(store store.Store, members *cluster.Members, router *cluster.Router, coordinator *Coordinator, telemetry *telemetry.Telemetry) *Handler {
 	return &Handler{
 		store:       store,
 		members:     members,
 		router:      router,
 		coordinator: coordinator,
+		telemetry:   telemetry,
 	}
 }
 
@@ -111,13 +123,23 @@ func NewHandler(store store.Store, members *cluster.Members, router *cluster.Rou
 // the command table (case-insensitively) and rejects an unknown command or a
 // wrong argument count with a RESP error before dispatching to the method.
 func (h *Handler) Handle(cmd protocol.Command) protocol.Value {
-	spec, ok := commands[strings.ToUpper(cmd.Name)]
+	name := strings.ToUpper(cmd.Name)
+	spec, ok := commands[name]
 	if !ok {
 		return protocol.Error("ERR unknown command '" + cmd.Name + "'")
 	}
 
 	if len(cmd.Args) < spec.minArgs || len(cmd.Args) > spec.maxArgs {
 		return protocol.Error(fmt.Sprintf("ERR wrong number of arguments for '%s'", cmd.Name))
+	}
+
+	switch name {
+	case get:
+		h.telemetry.RecordGet()
+	case set:
+		h.telemetry.RecordSet()
+	case del:
+		h.telemetry.RecordDelete()
 	}
 
 	// Routing: in a cluster, a command whose key this node does not own is answered
@@ -296,4 +318,16 @@ func (h *Handler) rbucket(args [][]byte) protocol.Value {
 	})
 
 	return protocol.BulkString(encodeEntries(entries))
+}
+
+// stats replies with this node's telemetry as an INFO-style bulk string — one `key:value` line per
+// counter (uptime plus the GET/SET/DEL totals).
+func (h *Handler) stats(args [][]byte) protocol.Value {
+	s := h.telemetry.Snapshot()
+	var b strings.Builder
+	fmt.Fprintf(&b, "uptime_seconds:%d\r\n", int64(s.Uptime.Seconds()))
+	fmt.Fprintf(&b, "gets:%d\r\n", s.Gets)
+	fmt.Fprintf(&b, "sets:%d\r\n", s.Sets)
+	fmt.Fprintf(&b, "deletes:%d\r\n", s.Deletes)
+	return protocol.BulkString([]byte(b.String()))
 }

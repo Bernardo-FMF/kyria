@@ -17,7 +17,7 @@ import (
 // a clean Close, so the goroutine's return value is ignored.
 func startServer(t *testing.T) *Server {
 	t.Helper()
-	srv := NewServer(store.New(), nil, nil, nil, 0, 0)
+	srv := NewServer(store.New(), nil, nil, nil, ServerOptions{})
 	if err := srv.Listen("127.0.0.1:0"); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestServer_ProtocolErrorClosesConnection(t *testing.T) {
 // promptly, and Serve returns nil. A ping/pong first guarantees the connection
 // is accepted and tracked before Close runs.
 func TestServer_GracefulShutdown(t *testing.T) {
-	srv := NewServer(store.New(), nil, nil, nil, 0, 0)
+	srv := NewServer(store.New(), nil, nil, nil, ServerOptions{})
 	if err := srv.Listen("127.0.0.1:0"); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestServer_GracefulShutdown(t *testing.T) {
 // loop is blocked on acquire() — so its PING gets no reply until one of the first two closes and
 // frees a slot.
 func TestServer_MaxConnsCap(t *testing.T) {
-	srv := NewServer(store.New(), nil, nil, nil, 2, 0)
+	srv := NewServer(store.New(), nil, nil, nil, ServerOptions{MaxConns: 2})
 	if err := srv.Listen("127.0.0.1:0"); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestServer_UnlimitedConnsWhenUncapped(t *testing.T) {
 // TestServer_IdleConnTimeout: with a conn-timeout set, a connection that goes idle (sends nothing)
 // is closed by the server once the read deadline lapses, so a pending read returns EOF.
 func TestServer_IdleConnTimeout(t *testing.T) {
-	srv := NewServer(store.New(), nil, nil, nil, 0, 150*time.Millisecond)
+	srv := NewServer(store.New(), nil, nil, nil, ServerOptions{ConnTimeout: 150 * time.Millisecond})
 	if err := srv.Listen("127.0.0.1:0"); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestServer_IdleConnTimeout(t *testing.T) {
 // window. A set-once deadline (pinned at connect time) would close it mid-stream — this is the test
 // that catches that mistake.
 func TestServer_ActiveConnStaysOpenPastTimeout(t *testing.T) {
-	srv := NewServer(store.New(), nil, nil, nil, 0, 300*time.Millisecond)
+	srv := NewServer(store.New(), nil, nil, nil, ServerOptions{ConnTimeout: 300 * time.Millisecond})
 	if err := srv.Listen("127.0.0.1:0"); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}

@@ -118,10 +118,23 @@ func (p *Peer) BucketEntries(addr string, leaves int, buckets []int) (map[string
 	return decodeEntries(entries)
 }
 
-// do sends args as a RESP command to addr and returns the decoded reply over a
-// pooled connection: a healthy conn goes back to the pool, a failed one is discarded.
+// do sends args as a RESP command to addr and returns the decoded reply. It tries a warm pooled
+// connection first; if that fails — most often because the peer closed it while idle — the conn is
+// discarded and do retries ONCE on a fresh dial. A failure on the fresh dial is real and returned.
+// The retry is safe because the replica verbs are idempotent (a repeated RSET re-reconciles the same
+// version to a no-op; reads have no side effects). A healthy conn always goes back to the pool.
 func (p *Peer) do(addr string, args ...[]byte) (protocol.Value, error) {
-	conn, err := p.get(addr)
+	conn := p.getIdle(addr)
+	if conn != nil {
+		reply, err := p.roundtrip(conn, args...)
+		if err == nil {
+			p.put(addr, conn)
+			return reply, nil
+		}
+		conn.Close()
+	}
+
+	conn, err := p.dial(addr)
 	if err != nil {
 		return protocol.Value{}, err
 	}
@@ -135,21 +148,24 @@ func (p *Peer) do(addr string, args ...[]byte) (protocol.Value, error) {
 	return reply, nil
 }
 
-// get returns a ready connection to addr — reusing a warm one from the pool if there
-// is one, otherwise dialing fresh. The dial happens OUTSIDE the lock so a slow
-// connect doesn't stall every other peer op.
-func (p *Peer) get(addr string) (*pooledConn, error) {
+// getIdle pops a warm connection to addr from the pool, or returns nil when none is pooled. It never
+// dials, so do can tell a reused conn (worth a retry if it fails) from a fresh one.
+func (p *Peer) getIdle(addr string) *pooledConn {
 	p.mu.Lock()
+	defer p.mu.Unlock()
 
 	conns := p.idle[addr]
 	if len(conns) > 0 {
 		last := conns[len(conns)-1]
 		p.idle[addr] = conns[:len(conns)-1]
-		p.mu.Unlock()
-		return last, nil
+		return last
 	}
-	p.mu.Unlock()
+	return nil
+}
 
+// dial opens a fresh connection to addr, pairing it with a persistent bufio.Reader. It takes no
+// lock — a slow connect must not stall other peer ops holding the pool mutex.
+func (p *Peer) dial(addr string) (*pooledConn, error) {
 	newConn, err := net.DialTimeout("tcp", addr, p.timeout)
 	if err != nil {
 		return nil, err

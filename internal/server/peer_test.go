@@ -68,8 +68,10 @@ func TestPeer_ReusesConnection(t *testing.T) {
 	}
 }
 
-// TestPeer_DiscardsBrokenConnection: when an op fails on a pooled connection (here,
-// the peer has gone away), that connection is closed and NOT returned to the pool.
+// TestPeer_DiscardsBrokenConnection: when an op fails on a pooled connection (here, the peer has
+// gone away), that connection is closed and NOT returned to the pool. With retry-once, do() then
+// dials a fresh conn too — which also fails since the peer is down — so the op still errors and the
+// pool ends empty. (The peer-alive case, where the retry succeeds, is TestPeer_RetriesStalePooledConn.)
 func TestPeer_DiscardsBrokenConnection(t *testing.T) {
 	srv := startServer(t)
 	addr := srv.Addr().String()
@@ -83,15 +85,50 @@ func TestPeer_DiscardsBrokenConnection(t *testing.T) {
 		t.Fatalf("idle conns after priming = %d, want 1", got)
 	}
 
-	// Kill the server; the pooled connection is now dead.
+	// Kill the server; the pooled connection is now dead and a fresh dial will fail too.
 	srv.Close()
 
-	// The next op reuses the dead conn, fails, and must discard it — not repool it.
+	// The next op reuses the dead conn (fails), retries onto a fresh dial (also fails), and must
+	// leave nothing in the pool.
 	if err := peer.rsetTest(addr, "k", "v"); err == nil {
 		t.Error("RSET over a dead pooled conn = nil error, want a failure")
 	}
 	if got := len(peer.idle[addr]); got != 0 {
 		t.Errorf("idle conns after a failed op = %d, want 0 (broken conn discarded)", got)
+	}
+}
+
+// TestPeer_RetriesStalePooledConn: a pooled connection the peer closed while idle (restart, idle
+// timeout) fails on reuse, so do() discards it and retries once on a fresh dial — with the server
+// still up, the op succeeds, and the fresh connection lands back in the pool.
+func TestPeer_RetriesStalePooledConn(t *testing.T) {
+	srv := startServer(t)
+	addr := srv.Addr().String()
+	peer := NewPeer(2 * time.Second)
+
+	// Prime the pool with one healthy connection, then close its socket to simulate the peer
+	// dropping the idle conn while the server itself stays up.
+	if err := peer.rsetTest(addr, "k", "v"); err != nil {
+		t.Fatalf("priming RSET: %v", err)
+	}
+	if got := len(peer.idle[addr]); got != 1 {
+		t.Fatalf("idle conns after priming = %d, want 1", got)
+	}
+	peer.idle[addr][0].Close()
+
+	// The next op reuses the dead pooled conn (fails), then retry-once dials fresh and succeeds.
+	got, found, err := peer.Get(addr, "k")
+	if err != nil {
+		t.Fatalf("Get after a stale pooled conn = %v, want success via retry", err)
+	}
+	if !found {
+		t.Error("Get found = false, want true")
+	}
+	if vs, derr := version.Decode(got); derr != nil || len(vs) != 1 || string(vs[0].Value) != "v" {
+		t.Fatalf("Get value = %v (err %v), want [v]", vs, derr)
+	}
+	if got := len(peer.idle[addr]); got != 1 {
+		t.Errorf("idle conns after retry = %d, want 1 (fresh conn repooled)", got)
 	}
 }
 

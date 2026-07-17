@@ -95,7 +95,7 @@ func main() {
 		log.Printf("gossip listening on %s", addr)
 	}
 
-	srv := server.NewServer(st, members, router, coordinator)
+	srv := server.NewServer(st, members, router, coordinator, cfg.MaxConns, cfg.ConnTimeout)
 	if err := srv.Listen(cfg.Addr); err != nil {
 		log.Fatalf("failed to bind %s: %v", cfg.Addr, err)
 	}

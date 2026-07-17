@@ -13,8 +13,11 @@ import (
 // It is deliberately plain data: parseFlags fills it, storeOptions turns it into
 // store.Options, and main reads Addr. Keeping it here leaves main.go to wiring.
 type Config struct {
-	Addr                 string        // TCP listen address, e.g. ":6379"
-	Shards               int           // number of lock-striped shards (concurrency)
+	Addr        string        // TCP listen address, e.g. ":6379"
+	Shards      int           // number of lock-striped shards (concurrency)
+	MaxConns    int           // max concurrent client connections; 0 = unlimited
+	ConnTimeout time.Duration // per-connection idle read + write timeout; 0 = no timeout
+
 	Eviction             string        // "none" | "lru" | "lfu" | "tinylfu"
 	MaxEntries           int           // PER-SHARD entry cap; 0 = unbounded (no eviction)
 	MaxValueSize         int           // max value bytes; 0 = store default
@@ -53,6 +56,8 @@ func parseFlags(args []string) (Config, error) {
 	fs := flag.NewFlagSet("kyria", flag.ContinueOnError)
 	addr := fs.String("addr", ":6379", "TCP listen address")
 	shards := fs.Int("shards", 32, "number of shards")
+	maxConns := fs.Int("max-conns", 0, "max concurrent client connections (0 = unlimited)")
+	connTimeout := fs.Duration("conn-timeout", 0, "per-connection idle read + write timeout (0 = none)")
 	eviction := fs.String("eviction", "none", "none|lru|lfu|tinylfu")
 	maxEntries := fs.Int("max-entries", 0, "per-shard entry cap (0 = unbounded)")
 	maxValueSize := fs.Int("max-value-size", 0, "max value bytes (0 = store default)")
@@ -81,6 +86,8 @@ func parseFlags(args []string) (Config, error) {
 	cfg := Config{
 		Addr:                 *addr,
 		Shards:               *shards,
+		MaxConns:             *maxConns,
+		ConnTimeout:          *connTimeout,
 		Eviction:             *eviction,
 		MaxEntries:           *maxEntries,
 		MaxValueSize:         *maxValueSize,
@@ -112,6 +119,10 @@ func parseFlags(args []string) (Config, error) {
 
 	if cfg.Eviction != "none" && cfg.MaxEntries <= 0 {
 		return Config{}, fmt.Errorf("-eviction %s needs -max-entries > 0", cfg.Eviction)
+	}
+
+	if cfg.MaxConns < 0 {
+		return Config{}, fmt.Errorf("-max-conns must be >= 0, got %d", cfg.MaxConns)
 	}
 
 	// Quorum bounds: R and W must be reachable within the replica set. R+W>N gives

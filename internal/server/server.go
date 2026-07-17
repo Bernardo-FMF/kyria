@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/Bernardo-FMF/kyria/internal/cluster"
 	"github.com/Bernardo-FMF/kyria/internal/protocol"
@@ -23,9 +24,11 @@ import (
 // flag, written under mu, orders shutdown against trackConn so no connection is
 // left tracked-but-unclosed.
 type Server struct {
-	handler  *Handler
-	listener net.Listener
-	wg       sync.WaitGroup // tracks in-flight connection goroutines, for drain
+	handler     *Handler
+	listener    net.Listener
+	wg          sync.WaitGroup // tracks in-flight connection goroutines, for drain
+	sem         chan struct{}  // bounds concurrent conns; nil = unlimited
+	connTimeout time.Duration
 
 	mu     sync.Mutex            // guards conns and closed
 	conns  map[net.Conn]struct{} // the set of live connections
@@ -34,13 +37,20 @@ type Server struct {
 
 // NewServer returns a Server that dispatches commands against store. Call Listen
 // then Serve to run it. members, router, and coordinator may be nil (standalone).
-func NewServer(store store.Store, members *cluster.Members, router *cluster.Router, coordinator *Coordinator) *Server {
+func NewServer(store store.Store, members *cluster.Members, router *cluster.Router, coordinator *Coordinator, maxConns int, connTimeout time.Duration) *Server {
 	handler := NewHandler(store, members, router, coordinator)
 	conns := make(map[net.Conn]struct{}, 10)
 
+	var sem chan struct{}
+	if maxConns > 0 {
+		sem = make(chan struct{}, maxConns)
+	}
+
 	return &Server{
-		handler: handler,
-		conns:   conns,
+		handler:     handler,
+		conns:       conns,
+		sem:         sem,
+		connTimeout: connTimeout,
 	}
 }
 
@@ -66,6 +76,7 @@ func (s *Server) Addr() net.Addr {
 // server down and returns the error.
 func (s *Server) Serve() error {
 	for {
+		s.acquire()
 		conn, err := s.listener.Accept()
 		if err != nil {
 			// Close closes the listener, which unblocks Accept with an error;
@@ -79,7 +90,10 @@ func (s *Server) Serve() error {
 
 		s.wg.Add(1) // count the connection before its goroutine starts
 		go func() {
-			defer s.wg.Done()
+			defer func() {
+				s.release()
+				s.wg.Done()
+			}()
 			s.handleConn(conn)
 		}()
 	}
@@ -107,16 +121,14 @@ func (s *Server) handleConn(conn net.Conn) {
 	writer := bufio.NewWriter(conn)
 
 	for {
+		if s.connTimeout > 0 {
+			conn.SetReadDeadline(time.Now().Add(s.connTimeout))
+		}
 		value, err := protocol.Decode(reader)
 		if err != nil {
 			if perr, ok := errors.AsType[*protocol.ProtocolError](err); ok {
 				errReply := protocol.Error("ERR " + perr.Error())
-				err = errReply.Encode(writer)
-				if err != nil {
-					return
-				}
-				err = writer.Flush()
-				if err != nil {
+				if err = s.writeReply(conn, writer, errReply); err != nil {
 					return
 				}
 			}
@@ -126,27 +138,27 @@ func (s *Server) handleConn(conn net.Conn) {
 		cmd, err := value.Command()
 		if err != nil {
 			errReply := protocol.Error("ERR " + err.Error())
-			err = errReply.Encode(writer)
-			if err != nil {
-				return
-			}
-			err = writer.Flush()
-			if err != nil {
+			if err = s.writeReply(conn, writer, errReply); err != nil {
 				return
 			}
 			continue
 		}
 
 		reply := s.handler.Handle(cmd)
-		err = reply.Encode(writer)
-		if err != nil {
-			return
-		}
-		err = writer.Flush()
-		if err != nil {
+		if err := s.writeReply(conn, writer, reply); err != nil {
 			return
 		}
 	}
+}
+
+func (s *Server) writeReply(conn net.Conn, w *bufio.Writer, v protocol.Value) error {
+	if s.connTimeout > 0 {
+		conn.SetWriteDeadline(time.Now().Add(s.connTimeout))
+	}
+	if err := v.Encode(w); err != nil {
+		return err
+	}
+	return w.Flush()
 }
 
 // trackConn registers conn as live, returning false if the server is already
@@ -209,4 +221,20 @@ func (s *Server) Close() error {
 	s.wg.Wait()
 
 	return err
+}
+
+// acquire takes a connection slot, blocking (backpressure) once the server is at its MaxConns cap.
+// It is a no-op when no cap is configured (sem is nil), so an uncapped server pays nothing.
+func (s *Server) acquire() {
+	if s.sem != nil {
+		s.sem <- struct{}{}
+	}
+}
+
+// release frees a connection slot taken by acquire, unblocking the accept loop if it is waiting at
+// capacity. A no-op when uncapped.
+func (s *Server) release() {
+	if s.sem != nil {
+		<-s.sem
+	}
 }

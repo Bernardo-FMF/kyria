@@ -35,6 +35,16 @@ func TestParseFlags(t *testing.T) {
 			want: Config{Addr: ":7000", Shards: 8, Eviction: "none", ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second, HintReplayerInterval: time.Second},
 		},
 		{
+			name: "max-conns",
+			args: []string{"-max-conns", "100"},
+			want: Config{Addr: ":6379", Shards: 32, MaxConns: 100, Eviction: "none", ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second, HintReplayerInterval: time.Second},
+		},
+		{
+			name: "conn-timeout",
+			args: []string{"-conn-timeout", "30s"},
+			want: Config{Addr: ":6379", Shards: 32, ConnTimeout: 30 * time.Second, Eviction: "none", ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second, HintReplayerInterval: time.Second},
+		},
+		{
 			name: "lru with cap",
 			args: []string{"-eviction", "lru", "-max-entries", "100"},
 			want: Config{Addr: ":6379", Shards: 32, Eviction: "lru", MaxEntries: 100, ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second, HintReplayerInterval: time.Second},
@@ -108,6 +118,7 @@ func TestParseFlags_Errors(t *testing.T) {
 		{"read-quorum above replication-factor", []string{"-read-quorum", "5", "-replication-factor", "3"}},
 		{"write-quorum below 1", []string{"-write-quorum", "0"}},
 		{"tombstone gc without grace", []string{"-tombstone-gc-interval", "10s"}},
+		{"negative max-conns", []string{"-max-conns", "-1"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

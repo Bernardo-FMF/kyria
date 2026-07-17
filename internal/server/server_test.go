@@ -17,7 +17,7 @@ import (
 // a clean Close, so the goroutine's return value is ignored.
 func startServer(t *testing.T) *Server {
 	t.Helper()
-	srv := NewServer(store.New(), nil, nil, nil)
+	srv := NewServer(store.New(), nil, nil, nil, 0, 0)
 	if err := srv.Listen("127.0.0.1:0"); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestServer_ProtocolErrorClosesConnection(t *testing.T) {
 // promptly, and Serve returns nil. A ping/pong first guarantees the connection
 // is accepted and tracked before Close runs.
 func TestServer_GracefulShutdown(t *testing.T) {
-	srv := NewServer(store.New(), nil, nil, nil)
+	srv := NewServer(store.New(), nil, nil, nil, 0, 0)
 	if err := srv.Listen("127.0.0.1:0"); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -208,5 +208,123 @@ func TestServer_GracefulShutdown(t *testing.T) {
 	// Close is idempotent.
 	if err := srv.Close(); err != nil {
 		t.Errorf("second Close: %v", err)
+	}
+}
+
+// TestServer_MaxConnsCap: with a cap of 2, two live connections fill both slots; a third connects
+// (the OS completes the handshake via the listen backlog) but no handler ever reads it — the accept
+// loop is blocked on acquire() — so its PING gets no reply until one of the first two closes and
+// frees a slot.
+func TestServer_MaxConnsCap(t *testing.T) {
+	srv := NewServer(store.New(), nil, nil, nil, 2, 0)
+	if err := srv.Listen("127.0.0.1:0"); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	go func() { _ = srv.Serve() }()
+	t.Cleanup(func() { srv.Close() })
+
+	// Two connections, each served a PING→PONG and then held open, so their handlers keep both slots.
+	c1, r1 := dial(t, srv)
+	c2, r2 := dial(t, srv)
+	writeCommand(t, c1, "PING")
+	if got := readReply(t, r1); got != "+PONG\r\n" {
+		t.Fatalf("c1 PING = %q, want +PONG", got)
+	}
+	writeCommand(t, c2, "PING")
+	if got := readReply(t, r2); got != "+PONG\r\n" {
+		t.Fatalf("c2 PING = %q, want +PONG", got)
+	}
+
+	// A third connection at capacity: it connects, but nothing reads it, so its PING gets no reply.
+	c3, r3 := dial(t, srv)
+	writeCommand(t, c3, "PING")
+	reply := make(chan error, 1)
+	go func() { _, err := protocol.Decode(r3); reply <- err }()
+
+	select {
+	case err := <-reply:
+		t.Fatalf("c3 was served while at capacity (decode err %v), want it blocked behind the cap", err)
+	case <-time.After(300 * time.Millisecond):
+		// good — no reply arrives; c3 is queued behind the semaphore
+	}
+
+	// Free a slot; the accept loop unblocks, accepts c3, and it finally gets its PONG.
+	c1.Close()
+	select {
+	case err := <-reply:
+		if err != nil {
+			t.Fatalf("c3 decode after a slot freed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("c3 still not served 2s after a slot freed")
+	}
+}
+
+// TestServer_UnlimitedConnsWhenUncapped: max-conns 0 means no cap, so many connections open at once
+// are all served — none blocks behind a semaphore.
+func TestServer_UnlimitedConnsWhenUncapped(t *testing.T) {
+	srv := startServer(t) // max-conns 0
+	const n = 16
+	for i := 0; i < n; i++ {
+		c, r := dial(t, srv)
+		writeCommand(t, c, "PING")
+		if got := readReply(t, r); got != "+PONG\r\n" {
+			t.Fatalf("conn %d PING = %q, want +PONG (uncapped must serve every connection)", i, got)
+		}
+		// dial registers a cleanup close, so all n connections stay open at once.
+	}
+}
+
+// TestServer_IdleConnTimeout: with a conn-timeout set, a connection that goes idle (sends nothing)
+// is closed by the server once the read deadline lapses, so a pending read returns EOF.
+func TestServer_IdleConnTimeout(t *testing.T) {
+	srv := NewServer(store.New(), nil, nil, nil, 0, 150*time.Millisecond)
+	if err := srv.Listen("127.0.0.1:0"); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	go func() { _ = srv.Serve() }()
+	t.Cleanup(func() { srv.Close() })
+
+	c, r := dial(t, srv)
+	writeCommand(t, c, "PING")
+	if got := readReply(t, r); got != "+PONG\r\n" {
+		t.Fatalf("PING = %q, want +PONG", got)
+	}
+
+	// Go idle: after ~150ms the server's read deadline fires and it closes the connection, so the
+	// blocked read returns an error (EOF) rather than hanging.
+	closed := make(chan error, 1)
+	go func() { _, err := r.ReadByte(); closed <- err }()
+	select {
+	case err := <-closed:
+		if err == nil {
+			t.Fatal("read on an idle connection succeeded, want the server to have closed it")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("connection still open long after the idle timeout — server did not close it")
+	}
+}
+
+// TestServer_ActiveConnStaysOpenPastTimeout: an active connection whose commands are spaced closer
+// than conn-timeout keeps resetting the rolling read deadline, so it stays open well past the timeout
+// window. A set-once deadline (pinned at connect time) would close it mid-stream — this is the test
+// that catches that mistake.
+func TestServer_ActiveConnStaysOpenPastTimeout(t *testing.T) {
+	srv := NewServer(store.New(), nil, nil, nil, 0, 300*time.Millisecond)
+	if err := srv.Listen("127.0.0.1:0"); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	go func() { _ = srv.Serve() }()
+	t.Cleanup(func() { srv.Close() })
+
+	c, r := dial(t, srv)
+	// Five PINGs, 100ms apart (< 300ms) and spanning 500ms total (> 300ms). Each resets the deadline,
+	// so the connection must survive the whole span.
+	for i := 0; i < 5; i++ {
+		time.Sleep(100 * time.Millisecond)
+		writeCommand(t, c, "PING")
+		if got := readReply(t, r); got != "+PONG\r\n" {
+			t.Fatalf("PING %d = %q, want +PONG (an active conn must stay open past conn-timeout)", i, got)
+		}
 	}
 }

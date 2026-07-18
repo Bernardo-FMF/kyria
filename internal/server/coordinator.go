@@ -8,6 +8,7 @@ import (
 	"github.com/Bernardo-FMF/kyria/internal/cluster"
 	"github.com/Bernardo-FMF/kyria/internal/protocol"
 	"github.com/Bernardo-FMF/kyria/internal/store"
+	"github.com/Bernardo-FMF/kyria/internal/telemetry"
 	"github.com/Bernardo-FMF/kyria/internal/vclock"
 	"github.com/Bernardo-FMF/kyria/internal/version"
 )
@@ -32,13 +33,34 @@ type Coordinator struct {
 	peer    replicator      // sends internal ops to the other replicas
 	hints   *hintStore      // parks a write when a replica's fan-out fails; drained by the HintReplayer
 	n, r, w int             // replication factor, read quorum, write quorum
+	// telemetry records replication events (hints parked, read-repairs, admission rejects). May be
+	// nil — the Record calls are no-ops on a nil receiver — which is how tests skip instrumentation.
+	telemetry *telemetry.Telemetry
 }
 
-// NewCoordinator returns a Coordinator over the local store, with replica set size n
-// and read/write quorums r/w. self is this node's client address, excluded from fan-out.
-// hints is shared with the HintReplayer: write parks a hint here for any replica it can't reach.
-func NewCoordinator(self string, router *cluster.Router, store store.Store, peer replicator, hints *hintStore, n, r, w int) *Coordinator {
-	return &Coordinator{self: self, router: router, store: store, peer: peer, hints: hints, n: n, r: r, w: w}
+// CoordinatorOptions carries the quorum tunables and injected collaborators, bundled into one struct
+// so NewCoordinator's signature stays stable as more are added. Unlike ServerOptions the zero value
+// is NOT usable: N/R/W have no sensible defaults, and a zero quorum would make every op fail.
+type CoordinatorOptions struct {
+	N, R, W   int                  // replication factor, read quorum, write quorum
+	Telemetry *telemetry.Telemetry // may be nil → recording is a no-op
+}
+
+// NewCoordinator returns a Coordinator over the local store, configured by opts. self is this node's
+// client address, excluded from fan-out. hints is shared with the HintReplayer: write parks a hint
+// here for any replica it can't reach.
+func NewCoordinator(self string, router *cluster.Router, store store.Store, peer replicator, hints *hintStore, opts CoordinatorOptions) *Coordinator {
+	return &Coordinator{
+		self:      self,
+		router:    router,
+		store:     store,
+		peer:      peer,
+		hints:     hints,
+		n:         opts.N,
+		r:         opts.R,
+		w:         opts.W,
+		telemetry: opts.Telemetry,
+	}
 }
 
 // coordinate applies a clustered client op end to end: the versioned local apply plus
@@ -64,7 +86,7 @@ func (c *Coordinator) write(key string, value []byte) protocol.Value {
 	// Mint the new clock inside Update so the read-modify-write is atomic: decode the
 	// current siblings, increment self on their frontier, reconcile the new version in.
 	var newClock vclock.Clock
-	_, err := c.store.Update(key, func(old []byte) []byte {
+	admitted, err := c.store.Update(key, func(old []byte) []byte {
 		existing, _ := version.Decode(old)
 		newClock = version.Frontier(existing).Increment(c.self)
 		return version.Encode(version.Reconcile(existing,
@@ -73,6 +95,10 @@ func (c *Coordinator) write(key string, value []byte) protocol.Value {
 
 	if err != nil {
 		return protocol.Error("ERR " + err.Error())
+	}
+
+	if !admitted {
+		c.telemetry.RecordEvent(evAdmissionRejects)
 	}
 
 	blob := version.Encode([]version.Version{{Value: value, Clock: newClock}})
@@ -88,6 +114,7 @@ func (c *Coordinator) write(key string, value []byte) protocol.Value {
 		err := c.peer.Replicate(addr, rset, [][]byte{[]byte(key), blob})
 		if err != nil {
 			c.hints.add(addr, key, blob)
+			c.telemetry.RecordEvent(evHintsParked)
 			return false
 		}
 		return true
@@ -110,7 +137,7 @@ func (c *Coordinator) delete(key string) protocol.Value {
 	var newClock vclock.Clock
 	var opState int64
 	deletedAt := time.Now().Unix()
-	_, err := c.store.Update(key, func(old []byte) []byte {
+	admitted, err := c.store.Update(key, func(old []byte) []byte {
 		existing, _ := version.Decode(old)
 		newClock = version.Frontier(existing).Increment(c.self)
 		if len(version.Live(existing)) > 0 {
@@ -125,6 +152,10 @@ func (c *Coordinator) delete(key string) protocol.Value {
 		return protocol.Error("ERR " + err.Error())
 	}
 
+	if !admitted {
+		c.telemetry.RecordEvent(evAdmissionRejects)
+	}
+
 	blob := version.Encode([]version.Version{version.Tombstone(newClock, deletedAt)})
 	replicas := c.router.Owners(key, c.n)
 	need := min(c.w, len(replicas))
@@ -133,6 +164,7 @@ func (c *Coordinator) delete(key string) protocol.Value {
 		err := c.peer.Replicate(addr, rset, [][]byte{[]byte(key), blob})
 		if err != nil {
 			c.hints.add(addr, key, blob)
+			c.telemetry.RecordEvent(evHintsParked)
 			return false
 		}
 		return true
@@ -241,6 +273,7 @@ func (c *Coordinator) readRepair(key string, merged []version.Version, responder
 			continue
 		}
 
+		c.telemetry.RecordEvent(evReadRepairs)
 		if addr == c.self {
 			c.store.Update(key, func(old []byte) []byte {
 				existing, _ := version.Decode(old)
@@ -253,6 +286,8 @@ func (c *Coordinator) readRepair(key string, merged []version.Version, responder
 		}
 
 		for _, v := range merged {
+			// Best effort operation, this ensures that at least an attempt to repair was made,
+			// not a confirmation that the peer repair was successful.
 			c.peer.Replicate(addr, rset, [][]byte{[]byte(key), version.Encode([]version.Version{v})})
 		}
 	}

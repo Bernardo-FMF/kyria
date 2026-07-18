@@ -5,25 +5,28 @@ import (
 	"time"
 
 	"github.com/Bernardo-FMF/kyria/internal/store"
+	"github.com/Bernardo-FMF/kyria/internal/telemetry"
 	"github.com/Bernardo-FMF/kyria/internal/version"
 )
 
 type TombstoneGC struct {
-	store    store.Store
-	grace    time.Duration
-	interval time.Duration
-	stop     chan struct{} // closed by Stop to tell run to exit
-	done     chan struct{} // closed by run once it has exited
-	stopOnce sync.Once     // guards close(stop) so Stop is idempotent
+	store     store.Store
+	grace     time.Duration
+	interval  time.Duration
+	telemetry *telemetry.Telemetry
+	stop      chan struct{} // closed by Stop to tell run to exit
+	done      chan struct{} // closed by run once it has exited
+	stopOnce  sync.Once     // guards close(stop) so Stop is idempotent
 }
 
-func NewTombstoneGC(store store.Store, grace, interval time.Duration) *TombstoneGC {
+func NewTombstoneGC(store store.Store, grace, interval time.Duration, telemetry *telemetry.Telemetry) *TombstoneGC {
 	t := &TombstoneGC{
-		store:    store,
-		grace:    grace,
-		interval: interval,
-		stop:     make(chan struct{}),
-		done:     make(chan struct{}),
+		store:     store,
+		grace:     grace,
+		interval:  interval,
+		telemetry: telemetry,
+		stop:      make(chan struct{}),
+		done:      make(chan struct{}),
 	}
 
 	go t.run()
@@ -53,6 +56,7 @@ func (t *TombstoneGC) sweep(now time.Time) int {
 			return reapable(versions, now, t.grace)
 		}) {
 			reaped++
+			t.telemetry.RecordEvent(evTombstonesReaped)
 		}
 	}
 

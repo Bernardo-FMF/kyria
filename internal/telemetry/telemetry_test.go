@@ -285,3 +285,58 @@ func TestHistogram_ConcurrentObserve(t *testing.T) {
 		t.Errorf("count after concurrent Observe = %d, want %d", got, goroutines*each)
 	}
 }
+
+// eventValue returns the recorded count for the named event, failing the test if it is absent.
+func eventValue(t *testing.T, s Snapshot, name string) int64 {
+	t.Helper()
+	for _, e := range s.Events {
+		if e.Name == name {
+			return e.Value
+		}
+	}
+	t.Fatalf("no event %q (have %+v)", name, s.Events)
+	return 0
+}
+
+// TestTelemetry_RecordsEvents: registered events count up, unregistered ones are ignored (the same
+// cardinality bound the commands have), and re-registering an existing event neither duplicates the
+// entry nor resets its count.
+func TestTelemetry_RecordsEvents(t *testing.T) {
+	tel := New()
+	tel.RegisterEvents([]string{"alpha", "beta"})
+
+	tel.RecordEvent("alpha")
+	tel.RecordEvent("alpha")
+	tel.RecordEvent("beta")
+	tel.RecordEvent("never_registered") // ignored
+
+	tel.RegisterEvents([]string{"alpha"}) // idempotent
+
+	s := tel.Snapshot()
+	if len(s.Events) != 2 {
+		t.Fatalf("got %d events, want 2 (re-registration must not duplicate)", len(s.Events))
+	}
+	if got := eventValue(t, s, "alpha"); got != 2 {
+		t.Errorf("alpha = %d, want 2 (re-registering must not reset the count)", got)
+	}
+	if got := eventValue(t, s, "beta"); got != 1 {
+		t.Errorf("beta = %d, want 1", got)
+	}
+}
+
+// TestTelemetry_EventsInRegistrationOrder: events come back in registration order, so STATS is stable.
+func TestTelemetry_EventsInRegistrationOrder(t *testing.T) {
+	tel := New()
+	names := []string{"one", "two", "three"}
+	tel.RegisterEvents(names)
+
+	s := tel.Snapshot()
+	if len(s.Events) != len(names) {
+		t.Fatalf("got %d events, want %d", len(s.Events), len(names))
+	}
+	for i, want := range names {
+		if s.Events[i].Name != want {
+			t.Errorf("Events[%d] = %q, want %q", i, s.Events[i].Name, want)
+		}
+	}
+}

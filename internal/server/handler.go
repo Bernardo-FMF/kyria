@@ -50,6 +50,15 @@ const (
 var ClientCommands = []string{get, set, del}
 
 const (
+	evHintsParked      = "hints_parked"
+	evReadRepairs      = "read_repairs"
+	evTombstonesReaped = "tombstones_reaped"
+	evAdmissionRejects = "admission_rejects"
+)
+
+var ReplicationEvents = []string{evHintsParked, evReadRepairs, evTombstonesReaped, evAdmissionRejects}
+
+const (
 	ttlEx = "EX"
 	ttlPx = "PX"
 )
@@ -338,6 +347,9 @@ func (h *Handler) stats(args [][]byte) protocol.Value {
 	}
 	for _, g := range s.Gauges {
 		fmt.Fprintf(&b, "%s:%d\r\n", g.Name, g.Value)
+	}
+	for _, e := range s.Events {
+		fmt.Fprintf(&b, "%s:%d\r\n", e.Name, e.Value)
 	}
 	return protocol.BulkString([]byte(b.String()))
 }

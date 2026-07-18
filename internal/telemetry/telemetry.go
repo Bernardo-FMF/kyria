@@ -125,10 +125,12 @@ func (h *histogram) Quantile(q float64) time.Duration {
 // atomic fields must not be copied. Every method is nil-safe, so a Handler built without telemetry
 // (tests, standalone construction) can call them freely as no-ops.
 type Telemetry struct {
-	startedAt time.Time
-	names     []string                 // registration order, so Snapshot/STATS output is stable
-	commands  map[string]*commandStats // written once in New, read-only after
-	gauges    []gauge
+	startedAt  time.Time
+	names      []string                 // registration order, so Snapshot/STATS output is stable
+	commands   map[string]*commandStats // written once in New, read-only after
+	gauges     []gauge
+	eventNames []string
+	events     map[string]*atomic.Int64
 }
 
 // New returns a Telemetry tracking the given commands, with its uptime clock started. The command
@@ -144,10 +146,12 @@ func New(commands ...string) *Telemetry {
 		}
 	}
 	return &Telemetry{
-		startedAt: time.Now(),
-		names:     commands,
-		commands:  cmds,
-		gauges:    make([]gauge, 0),
+		startedAt:  time.Now(),
+		names:      commands,
+		commands:   cmds,
+		gauges:     make([]gauge, 0),
+		eventNames: make([]string, 0),
+		events:     map[string]*atomic.Int64{},
 	}
 }
 
@@ -168,6 +172,21 @@ func (t *Telemetry) RegisterGauge(name string, fn func() int64) {
 	}
 
 	t.gauges = append(t.gauges, g)
+}
+
+func (t *Telemetry) RegisterEvents(events []string) {
+	if t == nil {
+		return
+	}
+
+	for _, e := range events {
+		if t.events[e] != nil {
+			continue
+		}
+
+		t.eventNames = append(t.eventNames, e)
+		t.events[e] = &atomic.Int64{}
+	}
 }
 
 // stats returns the counters for command, or nil when the receiver is nil or the command was never
@@ -221,6 +240,16 @@ func (t *Telemetry) RecordDuration(command string, d time.Duration) {
 	}
 }
 
+func (t *Telemetry) RecordEvent(name string) {
+	if t == nil {
+		return
+	}
+	e := t.events[name]
+	if e != nil {
+		e.Add(1)
+	}
+}
+
 // CommandSnapshot is one command's counters at an instant.
 type CommandSnapshot struct {
 	Command                     string
@@ -234,6 +263,11 @@ type GaugeSnapshot struct {
 	Value int64
 }
 
+type EventSnapshot struct {
+	Name  string
+	Value int64
+}
+
 // Snapshot is a plain, copyable read of the counters at one instant — safe to pass around and
 // format, unlike the atomics it is taken from. Each counter is loaded independently, so the set is
 // only approximately consistent (no cross-counter atomicity), which is fine for stats.
@@ -241,6 +275,7 @@ type Snapshot struct {
 	Uptime   time.Duration
 	Commands []CommandSnapshot
 	Gauges   []GaugeSnapshot
+	Events   []EventSnapshot
 }
 
 // Snapshot reads the current counters and uptime into a Snapshot for the STATS command. Commands come
@@ -274,9 +309,18 @@ func (t *Telemetry) Snapshot() Snapshot {
 		})
 	}
 
+	e := make([]EventSnapshot, 0, len(t.events))
+	for _, n := range t.eventNames {
+		e = append(e, EventSnapshot{
+			Name:  n,
+			Value: t.events[n].Load(),
+		})
+	}
+
 	return Snapshot{
 		Uptime:   time.Since(t.startedAt),
 		Commands: cmds,
 		Gauges:   g,
+		Events:   e,
 	}
 }

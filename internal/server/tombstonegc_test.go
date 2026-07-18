@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Bernardo-FMF/kyria/internal/store"
+	"github.com/Bernardo-FMF/kyria/internal/telemetry"
 	"github.com/Bernardo-FMF/kyria/internal/vclock"
 	"github.com/Bernardo-FMF/kyria/internal/version"
 )
@@ -121,7 +122,7 @@ func TestTombstoneGC_RunReapsPeriodically(t *testing.T) {
 	s := store.NewSharded(4)
 	s.Set("aged", tombBlob(vclock.Clock{"a": 1}, time.Now().Add(-2*time.Hour).Unix()))
 
-	gc := NewTombstoneGC(s, time.Hour, 5*time.Millisecond)
+	gc := NewTombstoneGC(s, time.Hour, 5*time.Millisecond, nil)
 	defer gc.Stop()
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -139,7 +140,30 @@ func TestTombstoneGC_RunReapsPeriodically(t *testing.T) {
 // TestTombstoneGC_StopIsIdempotent: Stop can be called repeatedly without panicking (double close)
 // or hanging (receive on the already-closed done channel).
 func TestTombstoneGC_StopIsIdempotent(t *testing.T) {
-	gc := NewTombstoneGC(store.NewSharded(1), time.Hour, time.Hour)
+	gc := NewTombstoneGC(store.NewSharded(1), time.Hour, time.Hour, nil)
 	gc.Stop()
 	gc.Stop()
+}
+
+// TestTombstoneGC_RecordsReaps: the sweep records one event per tombstone actually reaped — not per
+// key examined — so the counter tracks real reclamation rather than sweep activity.
+func TestTombstoneGC_RecordsReaps(t *testing.T) {
+	s := store.NewSharded(4)
+	now := time.Unix(1_700_000_000, 0)
+	tel := telemetry.New()
+	tel.RegisterEvents(ReplicationEvents)
+
+	s.Set("aged1", tombBlob(vclock.Clock{"a": 1}, now.Add(-2*time.Hour).Unix())) // reaped
+	s.Set("aged2", tombBlob(vclock.Clock{"a": 1}, now.Add(-3*time.Hour).Unix())) // reaped
+	s.Set("fresh", tombBlob(vclock.Clock{"a": 1}, now.Add(-time.Minute).Unix())) // examined, not reaped
+	s.Set("live", verBlob("v", vclock.Clock{"a": 1}))                            // examined, not reaped
+
+	gc := &TombstoneGC{store: s, grace: time.Hour, telemetry: tel}
+	if reaped := gc.sweep(now); reaped != 2 {
+		t.Fatalf("sweep reaped %d, want 2", reaped)
+	}
+
+	if got := eventCount(t, tel.Snapshot(), evTombstonesReaped); got != 2 {
+		t.Errorf("tombstones_reaped = %d, want 2 (one per key actually reaped)", got)
+	}
 }

@@ -319,7 +319,7 @@ func TestHandle_CoordinatesLocalWrite(t *testing.T) {
 
 	peer := newFakeReplicator() // every replica acks
 	st := store.New()
-	coord := NewCoordinator("a", router, st, peer, NewHintStore(), 3, 2, 3)
+	coord := NewCoordinator("a", router, st, peer, NewHintStore(), CoordinatorOptions{N: 3, R: 2, W: 3})
 	h := NewHandler(st, m, router, coord, nil)
 
 	// A key this node owns, so Handle coordinates instead of redirecting.
@@ -408,7 +408,7 @@ func TestHandle_TelemetryCountsClusteredOps(t *testing.T) {
 
 	peer := newFakeReplicator() // every replica acks
 	st := store.New()
-	coord := NewCoordinator("a", router, st, peer, NewHintStore(), 3, 2, 3)
+	coord := NewCoordinator("a", router, st, peer, NewHintStore(), CoordinatorOptions{N: 3, R: 2, W: 3})
 	tel := telemetry.New(ClientCommands...)
 	h := NewHandler(st, m, router, coord, tel)
 
@@ -610,7 +610,7 @@ func TestHandle_ErroredGetIsNeitherHitNorMiss(t *testing.T) {
 	peer.fail["b"] = true // both peers down, so R=3 can never be met
 	peer.fail["c"] = true
 	st := store.New()
-	coord := NewCoordinator("a", router, st, peer, NewHintStore(), 3, 3, 3)
+	coord := NewCoordinator("a", router, st, peer, NewHintStore(), CoordinatorOptions{N: 3, R: 3, W: 3})
 	tel := telemetry.New(ClientCommands...)
 	h := NewHandler(st, m, router, coord, tel)
 

@@ -58,6 +58,7 @@ func main() {
 
 	tel := telemetry.New(server.ClientCommands...)
 	tel.RegisterGauge("store_keys", func() int64 { return int64(st.Size()) })
+	tel.RegisterEvents(server.ReplicationEvents)
 
 	if cfg.GossipAddr != "" {
 		conn, err := net.ListenPacket("udp", cfg.GossipAddr)
@@ -85,7 +86,12 @@ func main() {
 		// reach a replica) and the replayer (delivers parked hints once the replica recovers).
 		hints := server.NewHintStore()
 		tel.RegisterGauge("hints_pending", func() int64 { return int64(hints.Size()) })
-		coordinator = server.NewCoordinator(self.ID, router, st, peer, hints, cfg.ReplicationFactor, cfg.ReadQuorum, cfg.WriteQuorum)
+		coordinator = server.NewCoordinator(self.ID, router, st, peer, hints, server.CoordinatorOptions{
+			N:         cfg.ReplicationFactor,
+			R:         cfg.ReadQuorum,
+			W:         cfg.WriteQuorum,
+			Telemetry: tel,
+		})
 		replayer = server.NewHintReplayer(hints, peer, cfg.HintReplayerInterval)
 
 		// Anti-entropy is opt-in — a zero interval disables it. When on, the background loop
@@ -95,7 +101,7 @@ func main() {
 		}
 
 		if cfg.TombstoneGCInterval > 0 {
-			tombstoneGC = server.NewTombstoneGC(st, cfg.TombstoneGrace, cfg.TombstoneGCInterval)
+			tombstoneGC = server.NewTombstoneGC(st, cfg.TombstoneGrace, cfg.TombstoneGCInterval, tel)
 		}
 
 		log.Printf("gossip listening on %s", addr)

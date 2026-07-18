@@ -11,6 +11,7 @@ import (
 	"github.com/Bernardo-FMF/kyria/internal/cluster"
 	"github.com/Bernardo-FMF/kyria/internal/protocol"
 	"github.com/Bernardo-FMF/kyria/internal/store"
+	"github.com/Bernardo-FMF/kyria/internal/telemetry"
 	"github.com/Bernardo-FMF/kyria/internal/vclock"
 	"github.com/Bernardo-FMF/kyria/internal/version"
 )
@@ -57,13 +58,37 @@ func (f *fakeReplicator) Get(addr, key string) ([]byte, bool, error) {
 // (self "a", peers "b"/"c"). With n=3 and three nodes, Owners returns all three, so
 // the fan-out to {b, c} is deterministic.
 func newTestCoordinator(s store.Store, peer replicator, n, r, w int) *Coordinator {
+	return newTestCoordinatorTel(s, peer, n, r, w, nil)
+}
+
+// newTestCoordinatorTel is newTestCoordinator with telemetry attached, for the event tests.
+func newTestCoordinatorTel(s store.Store, peer replicator, n, r, w int, tel *telemetry.Telemetry) *Coordinator {
 	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1})
 	m.Merge([]cluster.Node{
 		{ID: "b", Addr: "b", State: cluster.Alive, Incarnation: 1},
 		{ID: "c", Addr: "c", State: cluster.Alive, Incarnation: 1},
 	}, time.Now())
 	router := cluster.NewRouter(m, 50, time.Hour)
-	return NewCoordinator("a", router, s, peer, NewHintStore(), n, r, w)
+	return NewCoordinator("a", router, s, peer, NewHintStore(), CoordinatorOptions{N: n, R: r, W: w, Telemetry: tel})
+}
+
+// eventCount returns the recorded count for a replication event, failing the test if it is absent.
+func eventCount(t *testing.T, s telemetry.Snapshot, name string) int64 {
+	t.Helper()
+	for _, e := range s.Events {
+		if e.Name == name {
+			return e.Value
+		}
+	}
+	t.Fatalf("no event %q (have %+v)", name, s.Events)
+	return 0
+}
+
+// newEventTelemetry returns telemetry with the replication events registered.
+func newEventTelemetry() *telemetry.Telemetry {
+	tel := telemetry.New(ClientCommands...)
+	tel.RegisterEvents(ReplicationEvents)
+	return tel
 }
 
 func setCmd(key, value string) protocol.Command {
@@ -390,5 +415,77 @@ func TestCoordinator_ReadRepair(t *testing.T) {
 	}
 	if peer.replicated["c"] == 0 {
 		t.Error("stale peer c was not repaired")
+	}
+}
+
+// TestCoordinator_RecordsHintsParked: a fan-out that cannot reach a replica parks a hint AND records
+// the event, so the counter tracks handoff pressure. Parking happens in a fan-out goroutine, so poll.
+func TestCoordinator_RecordsHintsParked(t *testing.T) {
+	peer := newFakeReplicator()
+	peer.fail["b"] = true // b is down; self + c still make W=2
+	tel := newEventTelemetry()
+	c := newTestCoordinatorTel(store.New(), peer, 3, 2, 2, tel)
+
+	if got := encodeReply(t, c.coordinate(setCmd("k", "v"))); got != "+OK\r\n" {
+		t.Fatalf("write with one replica down = %q, want +OK", got)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		if eventCount(t, tel.Snapshot(), evHintsParked) >= 1 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no hints_parked event recorded for the down replica")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestCoordinator_AdmissionRejectNotRecordedOnStoreError: a store ERROR (oversized value) is not an
+// admission rejection. Both return admitted=false, but only a policy rejection returns a nil error —
+// counting the error case would inflate the very metric used to decide whether replica admission
+// rejection is real.
+func TestCoordinator_AdmissionRejectNotRecordedOnStoreError(t *testing.T) {
+	tel := newEventTelemetry()
+	s := store.NewSharded(1, store.WithMaxValueSize(4)) // any versioned blob exceeds 4 bytes
+	c := newTestCoordinatorTel(s, newFakeReplicator(), 3, 2, 2, tel)
+
+	if got := encodeReply(t, c.coordinate(setCmd("k", "v"))); !strings.HasPrefix(got, "-ERR") {
+		t.Fatalf("write rejected by the size limit = %q, want a -ERR (test premise)", got)
+	}
+
+	if got := eventCount(t, tel.Snapshot(), evAdmissionRejects); got != 0 {
+		t.Errorf("admission_rejects = %d, want 0 — a size-limit error is not an admission rejection", got)
+	}
+}
+
+// TestCoordinator_RecordsReadRepairs: read-repair records one event per divergent replica healed.
+// It runs in a goroutine off the read path, so poll.
+func TestCoordinator_RecordsReadRepairs(t *testing.T) {
+	peer := newFakeReplicator()
+	// c is down so b is the ONLY peer that can satisfy R=2. Otherwise c — which has no blob and so
+	// returns a valid EMPTY set — could satisfy the quorum first, and the read would reconcile
+	// nothing and return the stale local value. That made this test order-dependent.
+	peer.fail["c"] = true
+	peer.blobs["b"] = verBlob("new", vclock.Clock{"a": 2}) // b holds the newer version
+	tel := newEventTelemetry()
+	s := store.New()
+	s.Set("k", verBlob("old", vclock.Clock{"a": 1})) // local is stale → self needs repair
+	c := newTestCoordinatorTel(s, peer, 3, 2, 2, tel)
+
+	if got := encodeReply(t, c.coordinate(getCmd("k"))); got != "$3\r\nnew\r\n" {
+		t.Fatalf("read = %q, want the reconciled $3\\r\\nnew", got)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		if eventCount(t, tel.Snapshot(), evReadRepairs) >= 1 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no read_repairs event recorded after a divergent read")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

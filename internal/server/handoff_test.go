@@ -17,14 +17,14 @@ func TestHintStore_AddSizeSnapshot(t *testing.T) {
 	s.add("b", "k2", verBlob("v2", vclock.Clock{"a": 1}))
 	s.add("c", "k1", verBlob("v3", vclock.Clock{"a": 1}))
 
-	if got := s.size(); got != 3 {
+	if got := s.Size(); got != 3 {
 		t.Fatalf("size = %d, want 3", got)
 	}
 
 	// Overwriting an existing target+key stores the newer blob without growing size.
 	newer := verBlob("v1b", vclock.Clock{"a": 2})
 	s.add("b", "k1", newer)
-	if got := s.size(); got != 3 {
+	if got := s.Size(); got != 3 {
 		t.Errorf("size after overwrite = %d, want 3 (not a new entry)", got)
 	}
 
@@ -35,7 +35,7 @@ func TestHintStore_AddSizeSnapshot(t *testing.T) {
 
 	// A snapshot is a copy: mutating it must not change the store.
 	delete(snap, "b")
-	if got := s.size(); got != 3 {
+	if got := s.Size(); got != 3 {
 		t.Errorf("mutating the snapshot changed the store: size = %d, want 3", got)
 	}
 }
@@ -53,7 +53,7 @@ func TestHintStore_RemoveConditional(t *testing.T) {
 
 	// Removing with the STALE blob is a no-op: the newer, undelivered hint stays.
 	s.remove("b", "k", old)
-	if got := s.size(); got != 1 {
+	if got := s.Size(); got != 1 {
 		t.Fatalf("stale remove dropped the newer hint: size = %d, want 1", got)
 	}
 	if snap := s.snapshot(); !bytes.Equal(snap["b"]["k"], newer) {
@@ -62,7 +62,7 @@ func TestHintStore_RemoveConditional(t *testing.T) {
 
 	// Removing with the matching blob clears it and cleans up the now-empty target.
 	s.remove("b", "k", newer)
-	if got := s.size(); got != 0 {
+	if got := s.Size(); got != 0 {
 		t.Errorf("size after matching remove = %d, want 0", got)
 	}
 	if snap := s.snapshot(); len(snap) != 0 {
@@ -85,7 +85,7 @@ func TestHintReplayer_ReplayOnce(t *testing.T) {
 	if got := r.replayOnce(); got != 1 {
 		t.Errorf("replayOnce delivered %d, want 1 (b delivered, c still down)", got)
 	}
-	if got := s.size(); got != 1 {
+	if got := s.Size(); got != 1 {
 		t.Errorf("size after replay = %d, want 1 (c's hint kept)", got)
 	}
 
@@ -119,9 +119,9 @@ func TestHintReplayer_PeriodicDeliversThenStop(t *testing.T) {
 
 	// The loop should deliver the hint within a few ticks.
 	deadline := time.Now().Add(time.Second)
-	for s.size() != 0 {
+	for s.Size() != 0 {
 		if time.Now().After(deadline) {
-			t.Fatalf("replayer never delivered the hint: size = %d", s.size())
+			t.Fatalf("replayer never delivered the hint: size = %d", s.Size())
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
@@ -136,7 +136,7 @@ func TestHintReplayer_PeriodicDeliversThenStop(t *testing.T) {
 	r.Stop()
 	s.add("c", "k2", verBlob("w", vclock.Clock{"a": 1}))
 	time.Sleep(30 * time.Millisecond) // several intervals
-	if got := s.size(); got != 1 {
+	if got := s.Size(); got != 1 {
 		t.Errorf("a hint was delivered after Stop (size = %d), want it to linger", got)
 	}
 }

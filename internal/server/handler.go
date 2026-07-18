@@ -39,11 +39,14 @@ const (
 	// (key, blob) entries whose bucket is in that set — the entries a diff flagged for repair.
 	rbucket = "RBUCKET"
 
-	// stats is the STATS admin verb: it reports this node's telemetry counters (uptime plus the
-	// GET/SET/DEL totals) as an INFO-style bulk reply. Keyless and node-local, so it is never routed.
+	// stats is the STATS admin verb: it reports this node's telemetry (uptime, per-command counters,
+	// and sampled gauges) as an INFO-style bulk reply. Keyless and node-local, so it is never routed.
 	stats = "STATS"
 )
 
+// ClientCommands lists the client-facing verbs telemetry tracks. Internal replica verbs
+// (RGET/RSET/RTREE/RBUCKET) are deliberately excluded so replication traffic never pollutes client
+// metrics — telemetry silently ignores any command it was not registered with.
 var ClientCommands = []string{get, set, del}
 
 const (
@@ -315,8 +318,9 @@ func (h *Handler) rbucket(args [][]byte) protocol.Value {
 	return protocol.BulkString(encodeEntries(entries))
 }
 
-// stats replies with this node's telemetry as an INFO-style bulk string — one `key:value` line per
-// counter (uptime plus the counters for each command).
+// stats replies with this node's telemetry as an INFO-style bulk string: an uptime line, one row per
+// registered command, and one line per sampled gauge. It holds no per-command knowledge of its own —
+// the rows come from whatever was registered, so adding a command needs no change here.
 func (h *Handler) stats(args [][]byte) protocol.Value {
 	s := h.telemetry.Snapshot()
 
@@ -326,9 +330,17 @@ func (h *Handler) stats(args [][]byte) protocol.Value {
 		fmt.Fprintf(&b, "%s total=%d hits=%d misses=%d errors=%d\r\n",
 			c.Command, c.Total, c.Hits, c.Misses, c.Errors)
 	}
+	for _, g := range s.Gauges {
+		fmt.Fprintf(&b, "%s:%d\r\n", g.Name, g.Value)
+	}
 	return protocol.BulkString([]byte(b.String()))
 }
 
+// recordOutcome records how a served command turned out and passes the reply straight through. An
+// error reply counts as an error for that command; otherwise a GET is classified as a hit or a miss by
+// whether its bulk reply carries a value. Two consequences of where it is called from: a -MOVED
+// redirect returns before this, so a redirect counts as traffic but never as a failure; and an errored
+// GET is neither a hit nor a miss, which keeps hits+misses a count of SUCCESSFUL lookups.
 func (h *Handler) recordOutcome(name string, reply protocol.Value) protocol.Value {
 	if _, isErr := reply.AsError(); isErr {
 		h.telemetry.RecordError(name)

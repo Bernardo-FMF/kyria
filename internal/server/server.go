@@ -56,12 +56,21 @@ func NewServer(store store.Store, members *cluster.Members, router *cluster.Rout
 		sem = make(chan struct{}, opts.MaxConns)
 	}
 
-	return &Server{
+	srv := &Server{
 		handler:     handler,
 		conns:       conns,
 		sem:         sem,
 		connTimeout: opts.ConnTimeout,
 	}
+
+	// Registered here because this is the first point where both the telemetry and a live Server
+	// exist. They are closures rather than numbers, so every STATS re-samples: conns_live reads the
+	// current connection set, and conns_max reports the cap — 0 on an uncapped server, since cap of a
+	// nil channel is 0, which reads naturally as "no limit".
+	opts.Telemetry.RegisterGauge("conns_live", func() int64 { return int64(srv.liveConns()) })
+	opts.Telemetry.RegisterGauge("conns_max", func() int64 { return int64(cap(srv.sem)) })
+
+	return srv
 }
 
 // Listen binds the server to addr, a "host:port" TCP address. It is split from
@@ -231,6 +240,15 @@ func (s *Server) Close() error {
 	s.wg.Wait()
 
 	return err
+}
+
+// liveConns reports how many connections are currently being served. It takes the same lock that
+// guards conns, so it is safe to call from a gauge while the server runs.
+func (s *Server) liveConns() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return len(s.conns)
 }
 
 // acquire takes a connection slot, blocking (backpressure) once the server is at its MaxConns cap.

@@ -10,6 +10,7 @@ import (
 
 	"github.com/Bernardo-FMF/kyria/internal/protocol"
 	"github.com/Bernardo-FMF/kyria/internal/store"
+	"github.com/Bernardo-FMF/kyria/internal/telemetry"
 )
 
 // startServer binds a Server to an ephemeral loopback port, runs its accept loop
@@ -272,6 +273,31 @@ func TestServer_UnlimitedConnsWhenUncapped(t *testing.T) {
 			t.Fatalf("conn %d PING = %q, want +PONG (uncapped must serve every connection)", i, got)
 		}
 		// dial registers a cleanup close, so all n connections stay open at once.
+	}
+}
+
+// TestServer_StatsReportsConnectionGauges: the connection gauges registered by NewServer are sampled
+// live on every STATS — conns_live counts the connection issuing the command itself, and conns_max
+// reports the configured cap. This is the end-to-end proof that a gauge reads current state rather
+// than a value frozen at registration.
+func TestServer_StatsReportsConnectionGauges(t *testing.T) {
+	tel := telemetry.New(ClientCommands...)
+	srv := NewServer(store.New(), nil, nil, nil, ServerOptions{MaxConns: 5, Telemetry: tel})
+	if err := srv.Listen("127.0.0.1:0"); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	go func() { _ = srv.Serve() }()
+	t.Cleanup(func() { srv.Close() })
+
+	c, r := dial(t, srv)
+	writeCommand(t, c, "STATS")
+	got := readReply(t, r)
+
+	if !strings.Contains(got, "conns_live:1\r\n") {
+		t.Errorf("STATS = %q, want conns_live:1 (the connection asking is itself live)", got)
+	}
+	if !strings.Contains(got, "conns_max:5\r\n") {
+		t.Errorf("STATS = %q, want conns_max:5 (the configured cap)", got)
 	}
 }
 

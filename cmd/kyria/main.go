@@ -55,6 +55,10 @@ func main() {
 	var replayer *server.HintReplayer
 	var antiEntropy *server.AntiEntropy
 	var tombstoneGC *server.TombstoneGC
+
+	tel := telemetry.New(server.ClientCommands...)
+	tel.RegisterGauge("store_keys", func() int64 { return int64(st.Size()) })
+
 	if cfg.GossipAddr != "" {
 		conn, err := net.ListenPacket("udp", cfg.GossipAddr)
 		if err != nil {
@@ -80,6 +84,7 @@ func main() {
 		// One hint store is shared by the coordinator (parks a hint when a fan-out write can't
 		// reach a replica) and the replayer (delivers parked hints once the replica recovers).
 		hints := server.NewHintStore()
+		tel.RegisterGauge("hints_pending", func() int64 { return int64(hints.Size()) })
 		coordinator = server.NewCoordinator(self.ID, router, st, peer, hints, cfg.ReplicationFactor, cfg.ReadQuorum, cfg.WriteQuorum)
 		replayer = server.NewHintReplayer(hints, peer, cfg.HintReplayerInterval)
 
@@ -96,7 +101,6 @@ func main() {
 		log.Printf("gossip listening on %s", addr)
 	}
 
-	tel := telemetry.New(server.ClientCommands...)
 	srvOpts := server.ServerOptions{
 		MaxConns:    cfg.MaxConns,
 		ConnTimeout: cfg.ConnTimeout,

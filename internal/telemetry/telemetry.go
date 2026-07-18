@@ -19,6 +19,14 @@ type commandStats struct {
 	errors atomic.Int64
 }
 
+// gauge is a value telemetry does not own: it is sampled from its owner at Snapshot time rather than
+// accumulated. Registering a func rather than a number is what keeps the reading live — the body runs
+// on every Snapshot, so it always reflects current state instead of freezing at registration.
+type gauge struct {
+	name string
+	fn   func() int64
+}
+
 // Telemetry holds the live counters, keyed by command. It must be used as a pointer, since its
 // atomic fields must not be copied. Every method is nil-safe, so a Handler built without telemetry
 // (tests, standalone construction) can call them freely as no-ops.
@@ -26,6 +34,7 @@ type Telemetry struct {
 	startedAt time.Time
 	names     []string                 // registration order, so Snapshot/STATS output is stable
 	commands  map[string]*commandStats // written once in New, read-only after
+	gauges    []gauge
 }
 
 // New returns a Telemetry tracking the given commands, with its uptime clock started. The command
@@ -42,7 +51,27 @@ func New(commands ...string) *Telemetry {
 		startedAt: time.Now(),
 		names:     commands,
 		commands:  cmds,
+		gauges:    make([]gauge, 0),
 	}
+}
+
+// RegisterGauge adds a sampled value under name. The component that owns the value supplies fn, so
+// telemetry never mirrors state it does not own. fn runs on the STATS path: it must be cheap,
+// concurrency-safe, and must not take a lock its caller might already hold.
+//
+// Register during startup, before serving begins — the slice is written here and only read
+// afterwards, which is what keeps Snapshot free of synchronization.
+func (t *Telemetry) RegisterGauge(name string, fn func() int64) {
+	if t == nil {
+		return
+	}
+
+	g := gauge{
+		name: name,
+		fn:   fn,
+	}
+
+	t.gauges = append(t.gauges, g)
 }
 
 // stats returns the counters for command, or nil when the receiver is nil or the command was never
@@ -93,16 +122,25 @@ type CommandSnapshot struct {
 	Total, Hits, Misses, Errors int64
 }
 
+// GaugeSnapshot is one sampled gauge at an instant.
+type GaugeSnapshot struct {
+	Name  string
+	Value int64
+}
+
 // Snapshot is a plain, copyable read of the counters at one instant — safe to pass around and
 // format, unlike the atomics it is taken from. Each counter is loaded independently, so the set is
 // only approximately consistent (no cross-counter atomicity), which is fine for stats.
 type Snapshot struct {
 	Uptime   time.Duration
 	Commands []CommandSnapshot
+	Gauges   []GaugeSnapshot
 }
 
-// Snapshot reads the current counters and uptime into a Snapshot for the STATS command. Commands
-// come back in registration order, so the output is stable from call to call.
+// Snapshot reads the current counters and uptime into a Snapshot for the STATS command. Commands come
+// back in registration order, so the output is stable from call to call. Each registered gauge is
+// SAMPLED here — its function runs now, which is what makes gauge values current rather than frozen
+// at the moment they were registered.
 func (t *Telemetry) Snapshot() Snapshot {
 	if t == nil {
 		return Snapshot{}
@@ -119,8 +157,18 @@ func (t *Telemetry) Snapshot() Snapshot {
 			Errors:  c.errors.Load(),
 		})
 	}
+
+	g := make([]GaugeSnapshot, 0, len(t.gauges))
+	for _, f := range t.gauges {
+		g = append(g, GaugeSnapshot{
+			Name:  f.name,
+			Value: f.fn(),
+		})
+	}
+
 	return Snapshot{
 		Uptime:   time.Since(t.startedAt),
 		Commands: cmds,
+		Gauges:   g,
 	}
 }

@@ -84,6 +84,55 @@ func TestTelemetry_SnapshotShapeAndOrder(t *testing.T) {
 	}
 }
 
+// gaugeValue returns the sampled value for the named gauge, failing the test if it is absent.
+func gaugeValue(t *testing.T, s Snapshot, name string) int64 {
+	t.Helper()
+	for _, g := range s.Gauges {
+		if g.Name == name {
+			return g.Value
+		}
+	}
+	t.Fatalf("no gauge %q (have %+v)", name, s.Gauges)
+	return 0
+}
+
+// TestTelemetry_GaugeIsSampledNotFrozen: a gauge registers a FUNCTION, so every Snapshot re-reads the
+// current value instead of capturing it at registration time.
+func TestTelemetry_GaugeIsSampledNotFrozen(t *testing.T) {
+	tel := New()
+	live := int64(1)
+	tel.RegisterGauge("live", func() int64 { return live })
+
+	if got := gaugeValue(t, tel.Snapshot(), "live"); got != 1 {
+		t.Fatalf("gauge = %d, want 1", got)
+	}
+
+	live = 42 // the value the gauge watches moves
+
+	if got := gaugeValue(t, tel.Snapshot(), "live"); got != 42 {
+		t.Errorf("gauge = %d, want 42 — a gauge must re-sample, not freeze at registration", got)
+	}
+}
+
+// TestTelemetry_GaugesInRegistrationOrder: gauges come back in the order they were registered, so the
+// STATS output is stable.
+func TestTelemetry_GaugesInRegistrationOrder(t *testing.T) {
+	tel := New()
+	tel.RegisterGauge("a", func() int64 { return 1 })
+	tel.RegisterGauge("b", func() int64 { return 2 })
+	tel.RegisterGauge("c", func() int64 { return 3 })
+
+	s := tel.Snapshot()
+	if len(s.Gauges) != 3 {
+		t.Fatalf("got %d gauges, want 3", len(s.Gauges))
+	}
+	for i, want := range []string{"a", "b", "c"} {
+		if s.Gauges[i].Name != want {
+			t.Errorf("Gauges[%d] = %q, want %q (registration order)", i, s.Gauges[i].Name, want)
+		}
+	}
+}
+
 // TestTelemetry_NilIsSafe: a nil *Telemetry no-ops on every recorder and returns the zero Snapshot,
 // so a Handler built without telemetry never panics.
 func TestTelemetry_NilIsSafe(t *testing.T) {
@@ -93,6 +142,7 @@ func TestTelemetry_NilIsSafe(t *testing.T) {
 	tel.RecordHit("GET")
 	tel.RecordMiss("GET")
 	tel.RecordError("GET")
+	tel.RegisterGauge("x", func() int64 { return 1 })
 
 	if got := tel.Snapshot(); got.Uptime != 0 || got.Commands != nil {
 		t.Errorf("nil Snapshot = %+v, want the zero Snapshot", got)

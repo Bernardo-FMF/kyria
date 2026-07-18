@@ -97,9 +97,10 @@ func (h *hintStore) remove(target, key string, delivered []byte) {
 	}
 }
 
-// size reports the total number of parked hints across all targets. For tests and,
-// later, metrics.
-func (h *hintStore) size() int {
+// Size reports the total number of parked hints across all targets — the handoff backlog. A rising
+// value means a replica has been unreachable for a while, which is why it is exported: main registers
+// it as the hints_pending gauge.
+func (h *hintStore) Size() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 

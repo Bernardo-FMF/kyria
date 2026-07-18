@@ -96,7 +96,7 @@ func main() {
 		log.Printf("gossip listening on %s", addr)
 	}
 
-	tel := telemetry.New()
+	tel := telemetry.New(server.ClientCommands...)
 	srvOpts := server.ServerOptions{
 		MaxConns:    cfg.MaxConns,
 		ConnTimeout: cfg.ConnTimeout,

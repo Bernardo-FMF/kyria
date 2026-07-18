@@ -44,6 +44,8 @@ const (
 	stats = "STATS"
 )
 
+var ClientCommands = []string{get, set, del}
+
 const (
 	ttlEx = "EX"
 	ttlPx = "PX"
@@ -133,14 +135,7 @@ func (h *Handler) Handle(cmd protocol.Command) protocol.Value {
 		return protocol.Error(fmt.Sprintf("ERR wrong number of arguments for '%s'", cmd.Name))
 	}
 
-	switch name {
-	case get:
-		h.telemetry.RecordGet()
-	case set:
-		h.telemetry.RecordSet()
-	case del:
-		h.telemetry.RecordDelete()
-	}
+	h.telemetry.RecordCommand(name)
 
 	// Routing: in a cluster, a command whose key this node does not own is answered
 	// with a -MOVED redirect to the owner instead of served here. owner is the
@@ -323,11 +318,6 @@ func (h *Handler) rbucket(args [][]byte) protocol.Value {
 // stats replies with this node's telemetry as an INFO-style bulk string — one `key:value` line per
 // counter (uptime plus the GET/SET/DEL totals).
 func (h *Handler) stats(args [][]byte) protocol.Value {
-	s := h.telemetry.Snapshot()
-	var b strings.Builder
-	fmt.Fprintf(&b, "uptime_seconds:%d\r\n", int64(s.Uptime.Seconds()))
-	fmt.Fprintf(&b, "gets:%d\r\n", s.Gets)
-	fmt.Fprintf(&b, "sets:%d\r\n", s.Sets)
-	fmt.Fprintf(&b, "deletes:%d\r\n", s.Deletes)
-	return protocol.BulkString([]byte(b.String()))
+	//TODO
+	return protocol.Value{}
 }

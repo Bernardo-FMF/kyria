@@ -353,10 +353,22 @@ func TestHandle_CoordinatesLocalWrite(t *testing.T) {
 	}
 }
 
-// TestHandle_TelemetryCountsAndStats: Handle records client GET/SET/DEL into telemetry, STATS reports
-// the totals as an INFO-style bulk reply, and an internal RGET is NOT counted as a GET.
-func TestHandle_TelemetryCountsAndStats(t *testing.T) {
-	tel := telemetry.New()
+// commandTotal returns the recorded total for command, failing the test if telemetry has no entry.
+func commandTotal(t *testing.T, s telemetry.Snapshot, command string) int64 {
+	t.Helper()
+	for _, c := range s.Commands {
+		if c.Command == command {
+			return c.Total
+		}
+	}
+	t.Fatalf("no telemetry entry for %q (have %+v)", command, s.Commands)
+	return 0
+}
+
+// TestHandle_TelemetryCountsCommands: Handle records client GET/SET/DEL against their own counters,
+// and an internal RGET is not counted — it is never registered, so telemetry ignores it.
+func TestHandle_TelemetryCountsCommands(t *testing.T) {
+	tel := telemetry.New(ClientCommands...)
 	h := NewHandler(store.New(), nil, nil, nil, tel)
 
 	h.Handle(protocol.Command{Name: "SET", Args: [][]byte{[]byte("k"), []byte("v")}})
@@ -365,16 +377,15 @@ func TestHandle_TelemetryCountsAndStats(t *testing.T) {
 	h.Handle(protocol.Command{Name: "DEL", Args: [][]byte{[]byte("k")}})
 	h.Handle(protocol.Command{Name: "RGET", Args: [][]byte{[]byte("k2")}}) // internal verb — must not count
 
-	var buf bytes.Buffer
-	if err := h.Handle(protocol.Command{Name: "STATS"}).Encode(&buf); err != nil {
-		t.Fatalf("Encode STATS: %v", err)
+	s := tel.Snapshot()
+	if got := commandTotal(t, s, get); got != 1 {
+		t.Errorf("GET total = %d, want 1 (the RGET must not be counted)", got)
 	}
-	got := buf.String()
-	// gets:1 (not 2) proves the RGET was excluded; full lines avoid matching a longer number.
-	for _, want := range []string{"gets:1\r\n", "sets:2\r\n", "deletes:1\r\n"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("STATS reply %q is missing %q", got, want)
-		}
+	if got := commandTotal(t, s, set); got != 2 {
+		t.Errorf("SET total = %d, want 2", got)
+	}
+	if got := commandTotal(t, s, del); got != 1 {
+		t.Errorf("DEL total = %d, want 1", got)
 	}
 }
 
@@ -392,7 +403,7 @@ func TestHandle_TelemetryCountsClusteredOps(t *testing.T) {
 	peer := newFakeReplicator() // every replica acks
 	st := store.New()
 	coord := NewCoordinator("a", router, st, peer, NewHintStore(), 3, 2, 3)
-	tel := telemetry.New()
+	tel := telemetry.New(ClientCommands...)
 	h := NewHandler(st, m, router, coord, tel)
 
 	// A key this node owns, so Handle takes the coordinator path (returns before spec.run).
@@ -407,7 +418,7 @@ func TestHandle_TelemetryCountsClusteredOps(t *testing.T) {
 
 	h.Handle(protocol.Command{Name: "SET", Args: [][]byte{[]byte(localKey), []byte("v")}})
 
-	if got := tel.Snapshot().Sets; got != 1 {
-		t.Errorf("coordinated SET recorded Sets=%d, want 1 (clustered ops must be counted)", got)
+	if got := commandTotal(t, tel.Snapshot(), set); got != 1 {
+		t.Errorf("coordinated SET total = %d, want 1 (clustered ops must be counted)", got)
 	}
 }

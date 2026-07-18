@@ -156,11 +156,11 @@ func (h *Handler) Handle(cmd protocol.Command) protocol.Value {
 		// they never reach here — they fall through to the plain local spec.run below,
 		// which is what keeps a replicated write from re-replicating.)
 		if h.coordinator != nil {
-			return h.coordinator.coordinate(cmd)
+			return h.recordOutcome(name, h.coordinator.coordinate(cmd))
 		}
 	}
 
-	return spec.run(h, cmd.Args)
+	return h.recordOutcome(name, spec.run(h, cmd.Args))
 }
 
 // ping replies +PONG.
@@ -327,4 +327,19 @@ func (h *Handler) stats(args [][]byte) protocol.Value {
 			c.Command, c.Total, c.Hits, c.Misses, c.Errors)
 	}
 	return protocol.BulkString([]byte(b.String()))
+}
+
+func (h *Handler) recordOutcome(name string, reply protocol.Value) protocol.Value {
+	if _, isErr := reply.AsError(); isErr {
+		h.telemetry.RecordError(name)
+		return reply
+	}
+	if name == get {
+		if _, ok := reply.AsBulk(); ok {
+			h.telemetry.RecordHit(name)
+		} else {
+			h.telemetry.RecordMiss(name)
+		}
+	}
+	return reply
 }

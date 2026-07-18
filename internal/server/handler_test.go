@@ -353,16 +353,22 @@ func TestHandle_CoordinatesLocalWrite(t *testing.T) {
 	}
 }
 
-// commandTotal returns the recorded total for command, failing the test if telemetry has no entry.
-func commandTotal(t *testing.T, s telemetry.Snapshot, command string) int64 {
+// commandSnap returns the full telemetry entry for command, failing the test if there is none.
+func commandSnap(t *testing.T, s telemetry.Snapshot, command string) telemetry.CommandSnapshot {
 	t.Helper()
 	for _, c := range s.Commands {
 		if c.Command == command {
-			return c.Total
+			return c
 		}
 	}
 	t.Fatalf("no telemetry entry for %q (have %+v)", command, s.Commands)
-	return 0
+	return telemetry.CommandSnapshot{}
+}
+
+// commandTotal returns just the recorded total for command.
+func commandTotal(t *testing.T, s telemetry.Snapshot, command string) int64 {
+	t.Helper()
+	return commandSnap(t, s, command).Total
 }
 
 // TestHandle_TelemetryCountsCommands: Handle records client GET/SET/DEL against their own counters,
@@ -443,7 +449,7 @@ func TestHandle_StatsReportsPerCommandRows(t *testing.T) {
 
 	for _, want := range []string{
 		"uptime_seconds:",
-		"GET total=1 hits=0 misses=0 errors=0\r\n",
+		"GET total=1 hits=1 misses=0 errors=0\r\n", // the GET found "k", so it is a hit
 		"SET total=2 hits=0 misses=0 errors=0\r\n",
 		"DEL total=0 hits=0 misses=0 errors=0\r\n", // registered but unused
 	} {
@@ -490,5 +496,123 @@ func TestHandle_StatsWithoutTelemetry(t *testing.T) {
 	}
 	if got := buf.String(); !strings.Contains(got, "uptime_seconds:0\r\n") {
 		t.Errorf("STATS without telemetry = %q, want just the uptime line", got)
+	}
+}
+
+// TestHandle_RecordsHitsAndMisses: a GET that finds a value counts a hit, one that finds nothing
+// counts a miss, and an internal RGET counts neither — the outcome keys on the command NAME, not on
+// the method, and RGET shares (*Handler).get.
+func TestHandle_RecordsHitsAndMisses(t *testing.T) {
+	tel := telemetry.New(ClientCommands...)
+	s := store.New()
+	if _, err := s.Set("present", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	h := NewHandler(s, nil, nil, nil, tel)
+
+	h.Handle(protocol.Command{Name: "GET", Args: [][]byte{[]byte("present")}})  // hit
+	h.Handle(protocol.Command{Name: "GET", Args: [][]byte{[]byte("absent")}})   // miss
+	h.Handle(protocol.Command{Name: "RGET", Args: [][]byte{[]byte("present")}}) // neither
+
+	got := commandSnap(t, tel.Snapshot(), get)
+	if got.Total != 2 || got.Hits != 1 || got.Misses != 1 {
+		t.Errorf("GET = %+v, want {Total:2 Hits:1 Misses:1} (the RGET must not count)", got)
+	}
+}
+
+// TestHandle_RecordsErrors: a command whose reply is a RESP error counts an error for that command —
+// RED's E, which the traffic counter alone can't show.
+func TestHandle_RecordsErrors(t *testing.T) {
+	tel := telemetry.New(ClientCommands...)
+	h := NewHandler(store.New(), nil, nil, nil, tel)
+
+	// 3 args clears the arity check (SET takes 2..4) and lands in set's syntax-error branch.
+	h.Handle(protocol.Command{Name: "SET", Args: [][]byte{[]byte("k"), []byte("v"), []byte("BADARG")}})
+
+	got := commandSnap(t, tel.Snapshot(), set)
+	if got.Total != 1 || got.Errors != 1 {
+		t.Errorf("SET = %+v, want {Total:1 Errors:1}", got)
+	}
+}
+
+// TestHandle_MovedIsTrafficNotError: a -MOVED redirect still counts as a received command but must NOT
+// count as an error — it is a routing outcome, not a failure. Counting it would inflate the error rate
+// every time the ring shifts.
+func TestHandle_MovedIsTrafficNotError(t *testing.T) {
+	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1})
+	m.Merge([]cluster.Node{{ID: "b", Addr: "b", State: cluster.Alive, Incarnation: 1}}, time.Now())
+	router := cluster.NewRouter(m, 50, time.Hour)
+	tel := telemetry.New(ClientCommands...)
+	h := NewHandler(store.New(), m, router, nil, tel)
+
+	// A key this node does NOT own, so Handle answers with -MOVED.
+	var remoteKey string
+	for i := 0; ; i++ {
+		k := fmt.Sprintf("key-%d", i)
+		if !router.IsLocal(k) {
+			remoteKey = k
+			break
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := h.Handle(protocol.Command{Name: "GET", Args: [][]byte{[]byte(remoteKey)}}).Encode(&buf); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if got := buf.String(); !strings.HasPrefix(got, "-MOVED") {
+		t.Fatalf("GET of a non-owned key = %q, want -MOVED (test premise)", got)
+	}
+
+	got := commandSnap(t, tel.Snapshot(), get)
+	if got.Total != 1 {
+		t.Errorf("GET total = %d, want 1 (a redirect is still traffic this node received)", got.Total)
+	}
+	if got.Errors != 0 || got.Hits != 0 || got.Misses != 0 {
+		t.Errorf("GET = %+v, want no error/hit/miss recorded for a redirect", got)
+	}
+}
+
+// TestHandle_ErroredGetIsNeitherHitNorMiss: a GET that fails (read quorum unreachable) counts an
+// error and is recorded as neither a hit nor a miss — so hits+misses stay a count of SUCCESSFUL
+// lookups and the hit ratio derived from them stays meaningful.
+func TestHandle_ErroredGetIsNeitherHitNorMiss(t *testing.T) {
+	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1})
+	m.Merge([]cluster.Node{
+		{ID: "b", Addr: "b", State: cluster.Alive, Incarnation: 1},
+		{ID: "c", Addr: "c", State: cluster.Alive, Incarnation: 1},
+	}, time.Now())
+	router := cluster.NewRouter(m, 50, time.Hour)
+
+	peer := newFakeReplicator()
+	peer.fail["b"] = true // both peers down, so R=3 can never be met
+	peer.fail["c"] = true
+	st := store.New()
+	coord := NewCoordinator("a", router, st, peer, NewHintStore(), 3, 3, 3)
+	tel := telemetry.New(ClientCommands...)
+	h := NewHandler(st, m, router, coord, tel)
+
+	var localKey string
+	for i := 0; ; i++ {
+		k := fmt.Sprintf("key-%d", i)
+		if router.IsLocal(k) {
+			localKey = k
+			break
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := h.Handle(protocol.Command{Name: "GET", Args: [][]byte{[]byte(localKey)}}).Encode(&buf); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if got := buf.String(); !strings.HasPrefix(got, "-ERR") {
+		t.Fatalf("GET with R=3 and both peers down = %q, want a -ERR (test premise)", got)
+	}
+
+	got := commandSnap(t, tel.Snapshot(), get)
+	if got.Errors != 1 {
+		t.Errorf("GET errors = %d, want 1", got.Errors)
+	}
+	if got.Hits != 0 || got.Misses != 0 {
+		t.Errorf("GET = %+v, want neither a hit nor a miss for a failed lookup", got)
 	}
 }

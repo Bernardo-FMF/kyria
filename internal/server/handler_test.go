@@ -447,11 +447,13 @@ func TestHandle_StatsReportsPerCommandRows(t *testing.T) {
 	}
 	got := buf.String()
 
+	// Anchored on the trailing " p50=" so the counters are pinned exactly while the percentile values
+	// (which depend on how fast the machine actually ran) stay out of the assertion.
 	for _, want := range []string{
 		"uptime_seconds:",
-		"GET total=1 hits=1 misses=0 errors=0\r\n", // the GET found "k", so it is a hit
-		"SET total=2 hits=0 misses=0 errors=0\r\n",
-		"DEL total=0 hits=0 misses=0 errors=0\r\n", // registered but unused
+		"GET total=1 hits=1 misses=0 errors=0 p50=", // the GET found "k", so it is a hit
+		"SET total=2 hits=0 misses=0 errors=0 p50=",
+		"DEL total=0 hits=0 misses=0 errors=0 p50=", // registered but unused
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("STATS reply %q is missing %q", got, want)
@@ -459,6 +461,27 @@ func TestHandle_StatsReportsPerCommandRows(t *testing.T) {
 	}
 	if strings.Contains(got, "RGET") {
 		t.Errorf("STATS reply %q includes RGET; internal verbs must never be reported", got)
+	}
+}
+
+// TestHandle_RecordsLatency: a served command has its duration observed, so the command reports a
+// positive percentile while an untouched command stays at zero. This is the end-to-end proof that the
+// timing site in Handle actually reaches the per-command histogram.
+func TestHandle_RecordsLatency(t *testing.T) {
+	tel := telemetry.New(ClientCommands...)
+	h := NewHandler(store.New(), nil, nil, nil, tel)
+
+	h.Handle(protocol.Command{Name: "GET", Args: [][]byte{[]byte("k")}})
+
+	s := tel.Snapshot()
+	// Any served command lands in some bucket, so p50 is that bucket's bound — positive regardless of
+	// how fast the machine is. Asserting ">0" rather than an exact bound keeps this from flaking.
+	if got := commandSnap(t, s, get).P50; got <= 0 {
+		t.Errorf("GET p50 = %v, want a positive duration after a served command", got)
+	}
+	// DEL was never served, so its histogram has no observations and reports zero, not a bogus bound.
+	if got := commandSnap(t, s, del).P50; got != 0 {
+		t.Errorf("DEL p50 = %v, want 0 (never served)", got)
 	}
 }
 

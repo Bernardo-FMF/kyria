@@ -140,6 +140,12 @@ func (h *Handler) Handle(cmd protocol.Command) protocol.Value {
 
 	h.telemetry.RecordCommand(name)
 
+	// Start the latency clock before routing. Go evaluates call arguments left to right, so the
+	// dispatch below completes before recordOutcome is entered and its time.Since measures the real
+	// work. The -MOVED return bypasses recordOutcome entirely, so a redirect records no duration —
+	// correct, since this node never served it.
+	s := time.Now()
+
 	// Routing: in a cluster, a command whose key this node does not own is answered
 	// with a -MOVED redirect to the owner instead of served here. owner is the
 	// owner's client address (the node ID is its TCP addr), so it drops straight
@@ -159,11 +165,11 @@ func (h *Handler) Handle(cmd protocol.Command) protocol.Value {
 		// they never reach here — they fall through to the plain local spec.run below,
 		// which is what keeps a replicated write from re-replicating.)
 		if h.coordinator != nil {
-			return h.recordOutcome(name, h.coordinator.coordinate(cmd))
+			return h.recordOutcome(name, h.coordinator.coordinate(cmd), s)
 		}
 	}
 
-	return h.recordOutcome(name, spec.run(h, cmd.Args))
+	return h.recordOutcome(name, spec.run(h, cmd.Args), s)
 }
 
 // ping replies +PONG.
@@ -327,8 +333,8 @@ func (h *Handler) stats(args [][]byte) protocol.Value {
 	var b strings.Builder
 	fmt.Fprintf(&b, "uptime_seconds:%d\r\n", int64(s.Uptime.Seconds()))
 	for _, c := range s.Commands {
-		fmt.Fprintf(&b, "%s total=%d hits=%d misses=%d errors=%d\r\n",
-			c.Command, c.Total, c.Hits, c.Misses, c.Errors)
+		fmt.Fprintf(&b, "%s total=%d hits=%d misses=%d errors=%d p50=%s p99=%s\r\n",
+			c.Command, c.Total, c.Hits, c.Misses, c.Errors, c.P50, c.P99)
 	}
 	for _, g := range s.Gauges {
 		fmt.Fprintf(&b, "%s:%d\r\n", g.Name, g.Value)
@@ -341,7 +347,9 @@ func (h *Handler) stats(args [][]byte) protocol.Value {
 // whether its bulk reply carries a value. Two consequences of where it is called from: a -MOVED
 // redirect returns before this, so a redirect counts as traffic but never as a failure; and an errored
 // GET is neither a hit nor a miss, which keeps hits+misses a count of SUCCESSFUL lookups.
-func (h *Handler) recordOutcome(name string, reply protocol.Value) protocol.Value {
+func (h *Handler) recordOutcome(name string, reply protocol.Value, start time.Time) protocol.Value {
+	h.telemetry.RecordDuration(name, time.Since(start))
+
 	if _, isErr := reply.AsError(); isErr {
 		h.telemetry.RecordError(name)
 		return reply

@@ -6,6 +6,7 @@
 package cluster
 
 import (
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -45,14 +46,16 @@ type entry struct {
 // node ID (the gossip loop and the receive path touch it from different
 // goroutines) plus the ID of self.
 type Members struct {
-	mu    sync.Mutex
-	self  string
-	nodes map[string]*entry
+	mu     sync.Mutex
+	self   string
+	nodes  map[string]*entry
+	logger *slog.Logger
 }
 
 // NewMembers returns a roster seeded with self as its only member, forced to
-// state Alive. Every method that touches the roster holds m.mu.
-func NewMembers(self Node) *Members {
+// state Alive. Every method that touches the roster holds m.mu. A nil logger
+// falls back to slog.Default().
+func NewMembers(self Node, logger *slog.Logger) *Members {
 	nodes := make(map[string]*entry)
 
 	self.State = Alive
@@ -61,9 +64,14 @@ func NewMembers(self Node) *Members {
 		lastSeen: time.Now(),
 	}
 
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	return &Members{
-		self:  self.ID,
-		nodes: nodes,
+		self:   self.ID,
+		nodes:  nodes,
+		logger: logger.With("component", "membership"),
 	}
 }
 
@@ -95,6 +103,7 @@ func (m *Members) Merge(remote []Node, now time.Time) {
 
 		if local == nil { // unknown → insert
 			m.nodes[r.ID] = &entry{node: r, lastSeen: now}
+			m.logger.Info("node joined", "node", r.ID, "addr", r.Addr, "state", r.State)
 			continue
 		}
 
@@ -103,17 +112,23 @@ func (m *Members) Merge(remote []Node, now time.Time) {
 				local.node.Incarnation = r.Incarnation + 1
 				local.node.State = Alive
 				local.lastSeen = now
+				m.logger.Warn("refuted a false claim about self",
+					"claimed", r.State, "incarnation", local.node.Incarnation)
 			}
 			continue
 		}
 
 		switch {
 		case r.Incarnation > local.node.Incarnation:
+			was := local.node.State
 			local.node = r
 			local.lastSeen = now
+			m.logStateChange(r.ID, was, r.State)
 		case r.Incarnation == local.node.Incarnation && r.State > local.node.State:
+			was := local.node.State
 			local.node.State = r.State
 			local.lastSeen = now
+			m.logStateChange(r.ID, was, r.State)
 		}
 	}
 }
@@ -133,8 +148,23 @@ func (m *Members) DetectFailures(now time.Time, timeout time.Duration) {
 
 		if l.node.State == Alive && now.Sub(l.lastSeen) > timeout {
 			l.node.State = Dead
+			m.logger.Warn("node marked dead", "node", l.node.ID, "silent_for", now.Sub(l.lastSeen))
 		}
 	}
+}
+
+// logStateChange reports a member's liveness transition. Called with m.mu held.
+func (m *Members) logStateChange(id string, was, now NodeState) {
+	if was == now {
+		return
+	}
+
+	if now == Alive {
+		m.logger.Info("node recovered", "node", id, "was", was)
+		return
+	}
+
+	m.logger.Warn("node state changed", "node", id, "was", was, "now", now)
 }
 
 // Snapshot returns a copy of every member's Node — the payload the gossip loop

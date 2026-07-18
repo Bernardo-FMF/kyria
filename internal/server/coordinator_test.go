@@ -63,12 +63,12 @@ func newTestCoordinator(s store.Store, peer replicator, n, r, w int) *Coordinato
 
 // newTestCoordinatorTel is newTestCoordinator with telemetry attached, for the event tests.
 func newTestCoordinatorTel(s store.Store, peer replicator, n, r, w int, tel *telemetry.Telemetry) *Coordinator {
-	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1})
+	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1}, nil)
 	m.Merge([]cluster.Node{
 		{ID: "b", Addr: "b", State: cluster.Alive, Incarnation: 1},
 		{ID: "c", Addr: "c", State: cluster.Alive, Incarnation: 1},
 	}, time.Now())
-	router := cluster.NewRouter(m, 50, time.Hour)
+	router := cluster.NewRouter(m, 50, time.Hour, nil)
 	return NewCoordinator("a", router, s, peer, NewHintStore(), CoordinatorOptions{N: n, R: r, W: w, Telemetry: tel})
 }
 

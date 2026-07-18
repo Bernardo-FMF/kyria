@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log/slog"
 	"sync"
 	"time"
 
@@ -14,17 +15,24 @@ type TombstoneGC struct {
 	grace     time.Duration
 	interval  time.Duration
 	telemetry *telemetry.Telemetry
+	logger    *slog.Logger
 	stop      chan struct{} // closed by Stop to tell run to exit
 	done      chan struct{} // closed by run once it has exited
 	stopOnce  sync.Once     // guards close(stop) so Stop is idempotent
 }
 
-func NewTombstoneGC(store store.Store, grace, interval time.Duration, telemetry *telemetry.Telemetry) *TombstoneGC {
+// NewTombstoneGC starts the sweep loop. A nil logger falls back to slog.Default().
+func NewTombstoneGC(store store.Store, grace, interval time.Duration, telemetry *telemetry.Telemetry, logger *slog.Logger) *TombstoneGC {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	t := &TombstoneGC{
 		store:     store,
 		grace:     grace,
 		interval:  interval,
 		telemetry: telemetry,
+		logger:    logger.With("component", "tombstonegc"),
 		stop:      make(chan struct{}),
 		done:      make(chan struct{}),
 	}
@@ -58,6 +66,10 @@ func (t *TombstoneGC) sweep(now time.Time) int {
 			reaped++
 			t.telemetry.RecordEvent(evTombstonesReaped)
 		}
+	}
+
+	if reaped > 0 {
+		t.logger.Info("tombstones reaped", "reaped", reaped, "candidates", len(expired))
 	}
 
 	return reaped

@@ -98,7 +98,7 @@ func TestGossip_Converges(t *testing.T) {
 	gossipers := make([]*Gossiper, n)
 	conns := make([]net.PacketConn, n)
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		conn, err := net.ListenPacket("udp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatalf("ListenPacket: %v", err)
@@ -109,11 +109,11 @@ func TestGossip_Converges(t *testing.T) {
 			Addr:        conn.LocalAddr().String(),
 			State:       Alive,
 			Incarnation: 1,
-		})
+		}, nil)
 	}
 
 	seed := conns[0].LocalAddr().String()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		var seeds []string
 		if i != 0 {
 			seeds = []string{seed} // only n0 is a seed
@@ -135,7 +135,7 @@ func TestGossip_Converges(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		converged := true
-		for i := 0; i < n; i++ {
+		for i := range n {
 			if len(members[i].Alive()) != n {
 				converged = false
 				break
@@ -145,7 +145,7 @@ func TestGossip_Converges(t *testing.T) {
 			return // every node sees all n members
 		}
 		if time.Now().After(deadline) {
-			for i := 0; i < n; i++ {
+			for i := range n {
 				t.Logf("n%d knows %d/%d members", i, len(members[i].Alive()), n)
 			}
 			t.Fatal("cluster did not converge within 5s")

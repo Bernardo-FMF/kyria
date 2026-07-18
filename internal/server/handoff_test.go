@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -80,7 +81,7 @@ func TestHintReplayer_ReplayOnce(t *testing.T) {
 	s.add("c", "k2", verBlob("w", vclock.Clock{"a": 1}))
 
 	// Construct the replayer directly (no goroutine) to test the sweep in isolation.
-	r := &HintReplayer{store: s, replicator: peer}
+	r := &HintReplayer{store: s, replicator: peer, logger: slog.Default()}
 
 	if got := r.replayOnce(); got != 1 {
 		t.Errorf("replayOnce delivered %d, want 1 (b delivered, c still down)", got)
@@ -115,7 +116,7 @@ func TestHintReplayer_PeriodicDeliversThenStop(t *testing.T) {
 	s := NewHintStore()
 	s.add("b", "k", verBlob("v", vclock.Clock{"a": 1}))
 
-	r := NewHintReplayer(s, peer, 5*time.Millisecond)
+	r := NewHintReplayer(s, peer, 5*time.Millisecond, nil)
 
 	// The loop should deliver the hint within a few ticks.
 	deadline := time.Now().Add(time.Second)
@@ -144,7 +145,7 @@ func TestHintReplayer_PeriodicDeliversThenStop(t *testing.T) {
 // TestHintReplayer_StopIdempotent: Stop can be called more than once without a panic
 // or a hang (the sync.Once guards close(stop), the closed done stays ready).
 func TestHintReplayer_StopIdempotent(t *testing.T) {
-	r := NewHintReplayer(NewHintStore(), newFakeReplicator(), time.Hour)
+	r := NewHintReplayer(NewHintStore(), newFakeReplicator(), time.Hour, nil)
 	r.Stop()
 	r.Stop()
 }

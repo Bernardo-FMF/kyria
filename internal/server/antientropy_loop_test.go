@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log/slog"
 	"testing"
 
 	"github.com/Bernardo-FMF/kyria/internal/merkle"
@@ -41,7 +42,7 @@ func TestAntiEntropy_SyncWithReconciles(t *testing.T) {
 		entries: map[string][]byte{"k": verBlob("new", vclock.Clock{"a": 2})},
 	}
 
-	ae := &AntiEntropy{self: "a", store: s, peer: fake, leaves: leaves}
+	ae := &AntiEntropy{self: "a", store: s, peer: fake, leaves: leaves, logger: slog.Default()}
 	ae.syncWith("b")
 
 	blob, ok := s.Get("k")
@@ -65,7 +66,7 @@ func TestAntiEntropy_SyncWithNoDiffSkipsFetch(t *testing.T) {
 	peerTree.Add("k", verBlob("v", vclock.Clock{"a": 1}))
 	fake := &fakeTreeSyncer{tree: peerTree}
 
-	ae := &AntiEntropy{self: "a", store: s, peer: fake, leaves: leaves}
+	ae := &AntiEntropy{self: "a", store: s, peer: fake, leaves: leaves, logger: slog.Default()}
 	ae.syncWith("b")
 
 	if fake.bucketCalls != 0 {

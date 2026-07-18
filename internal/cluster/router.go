@@ -1,6 +1,8 @@
 package cluster
 
 import (
+	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,6 +25,11 @@ type Router struct {
 	// and never see a half-built ring — an immutable value published by pointer swap.
 	ring atomic.Pointer[Ring]
 
+	logger *slog.Logger
+	// lastNodes is the sorted membership the current ring was built from. Only rebuild touches it,
+	// and rebuild runs on one goroutine (the constructor's call precedes Start), so it needs no lock.
+	lastNodes []string
+
 	stopOnce sync.Once
 	stop     chan struct{}
 	wg       sync.WaitGroup
@@ -30,13 +37,19 @@ type Router struct {
 
 // NewRouter returns a Router for members, with replicas virtual nodes per node and
 // a rebuild every interval. It builds the initial ring immediately, so Owner works
-// before (and without) Start — handy for a single-node setup.
-func NewRouter(members *Members, replicas int, interval time.Duration) *Router {
+// before (and without) Start — handy for a single-node setup. A nil logger falls
+// back to slog.Default().
+func NewRouter(members *Members, replicas int, interval time.Duration, logger *slog.Logger) *Router {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	router := &Router{
 		self:     members.self,
 		members:  members,
 		replicas: replicas,
 		interval: interval,
+		logger:   logger.With("component", "router"),
 		stop:     make(chan struct{}),
 	}
 	router.rebuild()
@@ -47,13 +60,23 @@ func NewRouter(members *Members, replicas int, interval time.Duration) *Router {
 // with a single atomic Store. Building a brand-new ring (rather than mutating the
 // live one) is what lets readers stay lock-free — see the note at the bottom.
 func (r *Router) rebuild() {
+	alive := r.members.Alive()
+	nodes := make([]string, 0, len(alive))
+
 	ring := NewRing(r.replicas)
-	for _, node := range r.members.Alive() {
+	for _, node := range alive {
 		ring.Add(node.ID)
+		nodes = append(nodes, node.ID)
 	}
 	ring.Sort()
 
 	r.ring.Store(ring)
+
+	slices.Sort(nodes)
+	if !slices.Equal(nodes, r.lastNodes) {
+		r.logger.Info("ring rebuilt", "nodes", len(nodes), "members", nodes)
+		r.lastNodes = nodes
+	}
 }
 
 // Start launches the background loop that rebuilds the ring every interval, until

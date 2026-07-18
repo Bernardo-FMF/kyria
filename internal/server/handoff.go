@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -122,6 +123,7 @@ type HintReplayer struct {
 	store      *hintStore
 	replicator replicator
 	interval   time.Duration
+	logger     *slog.Logger
 	stop       chan struct{} // closed by Stop to tell run to exit
 	done       chan struct{} // closed by run once it has exited
 	stopOnce   sync.Once     // guards close(stop) so Stop is idempotent
@@ -130,11 +132,17 @@ type HintReplayer struct {
 // NewHintReplayer starts a goroutine that replays parked hints from store over
 // replicator every interval, and returns a handle. The caller must call Stop to release
 // the goroutine. It is exported so main can hold the handle and Stop it on shutdown.
-func NewHintReplayer(store *hintStore, replicator replicator, interval time.Duration) *HintReplayer {
+// A nil logger falls back to slog.Default().
+func NewHintReplayer(store *hintStore, replicator replicator, interval time.Duration, logger *slog.Logger) *HintReplayer {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	h := &HintReplayer{
 		store:      store,
 		replicator: replicator,
 		interval:   interval,
+		logger:     logger.With("component", "handoff"),
 		stop:       make(chan struct{}),
 		done:       make(chan struct{}),
 	}
@@ -171,6 +179,7 @@ func (h *HintReplayer) replayOnce() int {
 	snaphot := h.store.snapshot()
 
 	var delivered atomic.Int64
+	var failed atomic.Int64
 	var wg sync.WaitGroup
 
 	for target, hintMap := range snaphot {
@@ -183,13 +192,23 @@ func (h *HintReplayer) replayOnce() int {
 				if err == nil {
 					h.store.remove(target, key, blob)
 					delivered.Add(1)
+					return
 				}
+				failed.Add(1)
 			}(target, key, blob)
 		}
 	}
 
 	wg.Wait()
-	return int(delivered.Load())
+
+	d := int(delivered.Load())
+	if f := failed.Load(); f > 0 {
+		h.logger.Warn("hints undelivered", "failed", f, "delivered", d, "pending", h.store.Size())
+	} else if d > 0 {
+		h.logger.Info("hints delivered", "delivered", d, "pending", h.store.Size())
+	}
+
+	return d
 }
 
 // Stop shuts the replayer down and blocks until its goroutine has exited, so no sweep

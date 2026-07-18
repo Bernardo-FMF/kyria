@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"log/slog"
 	"math/rand/v2"
 	"sync"
 	"time"
@@ -122,6 +123,7 @@ type AntiEntropy struct {
 	members  *cluster.Members
 	leaves   int
 	interval time.Duration
+	logger   *slog.Logger
 	stop     chan struct{} // closed by Stop to tell run to exit
 	done     chan struct{} // closed by run once it has exited
 	stopOnce sync.Once     // guards close(stop) so Stop is idempotent
@@ -129,8 +131,13 @@ type AntiEntropy struct {
 
 // NewAntiEntropy starts the reconcile loop against peers drawn from members, using leaves as the
 // (cluster-fixed) Merkle leaf count and syncing every interval; self is excluded from peer
-// selection. The caller must Stop it or the goroutine leaks.
-func NewAntiEntropy(self string, store store.Store, peer treeSyncer, members *cluster.Members, leaves int, interval time.Duration) *AntiEntropy {
+// selection. The caller must Stop it or the goroutine leaks. A nil logger falls back to
+// slog.Default().
+func NewAntiEntropy(self string, store store.Store, peer treeSyncer, members *cluster.Members, leaves int, interval time.Duration, logger *slog.Logger) *AntiEntropy {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	a := &AntiEntropy{
 		self:     self,
 		store:    store,
@@ -138,6 +145,7 @@ func NewAntiEntropy(self string, store store.Store, peer treeSyncer, members *cl
 		members:  members,
 		leaves:   leaves,
 		interval: interval,
+		logger:   logger.With("component", "antientropy"),
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
 	}
@@ -195,6 +203,7 @@ func (a *AntiEntropy) syncWith(addr string) {
 	a.store.Range(func(k string, v []byte) { t.Add(k, v) })
 	pt, err := a.peer.Tree(addr, a.leaves)
 	if err != nil {
+		a.logger.Warn("could not fetch peer tree", "peer", addr, "err", err)
 		return
 	}
 
@@ -204,6 +213,12 @@ func (a *AntiEntropy) syncWith(addr string) {
 	}
 
 	entries, err := a.peer.BucketEntries(addr, a.leaves, diffs)
+	if err != nil {
+		a.logger.Warn("could not fetch peer buckets", "peer", addr, "buckets", len(diffs), "err", err)
+		return
+	}
+
+	a.logger.Info("reconciling with peer", "peer", addr, "buckets", len(diffs), "entries", len(entries))
 
 	for key, blob := range entries {
 		a.store.Update(key, func(old []byte) []byte {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log/slog"
 	"testing"
 	"time"
 
@@ -68,7 +69,7 @@ func TestTombstoneGC_SweepReapsOnlyAgedTombstones(t *testing.T) {
 		version.Tombstone(vclock.Clock{"b": 1}, now.Add(-2*time.Hour).Unix()),
 	}))
 
-	gc := &TombstoneGC{store: s, grace: grace}
+	gc := &TombstoneGC{store: s, grace: grace, logger: slog.Default()}
 
 	if reaped := gc.sweep(now); reaped != 1 {
 		t.Errorf("sweep reaped %d keys, want 1 (only the aged tombstone)", reaped)
@@ -107,7 +108,7 @@ func TestTombstoneGC_SweepRechecksRevivedKey(t *testing.T) {
 	base.Set("k", tombBlob(vclock.Clock{"a": 1}, now.Add(-2*time.Hour).Unix())) // aged → collected in phase 1
 	s := &revivingStore{Store: base}
 
-	gc := &TombstoneGC{store: s, grace: time.Hour}
+	gc := &TombstoneGC{store: s, grace: time.Hour, logger: slog.Default()}
 	if reaped := gc.sweep(now); reaped != 0 {
 		t.Errorf("sweep reaped %d keys, want 0 — the key was revived before the delete", reaped)
 	}
@@ -122,7 +123,7 @@ func TestTombstoneGC_RunReapsPeriodically(t *testing.T) {
 	s := store.NewSharded(4)
 	s.Set("aged", tombBlob(vclock.Clock{"a": 1}, time.Now().Add(-2*time.Hour).Unix()))
 
-	gc := NewTombstoneGC(s, time.Hour, 5*time.Millisecond, nil)
+	gc := NewTombstoneGC(s, time.Hour, 5*time.Millisecond, nil, nil)
 	defer gc.Stop()
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -140,7 +141,7 @@ func TestTombstoneGC_RunReapsPeriodically(t *testing.T) {
 // TestTombstoneGC_StopIsIdempotent: Stop can be called repeatedly without panicking (double close)
 // or hanging (receive on the already-closed done channel).
 func TestTombstoneGC_StopIsIdempotent(t *testing.T) {
-	gc := NewTombstoneGC(store.NewSharded(1), time.Hour, time.Hour, nil)
+	gc := NewTombstoneGC(store.NewSharded(1), time.Hour, time.Hour, nil, nil)
 	gc.Stop()
 	gc.Stop()
 }
@@ -158,7 +159,7 @@ func TestTombstoneGC_RecordsReaps(t *testing.T) {
 	s.Set("fresh", tombBlob(vclock.Clock{"a": 1}, now.Add(-time.Minute).Unix())) // examined, not reaped
 	s.Set("live", verBlob("v", vclock.Clock{"a": 1}))                            // examined, not reaped
 
-	gc := &TombstoneGC{store: s, grace: time.Hour, telemetry: tel}
+	gc := &TombstoneGC{store: s, grace: time.Hour, telemetry: tel, logger: slog.Default()}
 	if reaped := gc.sweep(now); reaped != 2 {
 		t.Fatalf("sweep reaped %d, want 2", reaped)
 	}

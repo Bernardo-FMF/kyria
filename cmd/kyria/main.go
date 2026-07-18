@@ -4,7 +4,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -29,8 +29,14 @@ const antiEntropyLeaves = 1024
 func main() {
 	cfg, err := parseFlags(os.Args[1:])
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		slog.Error("config", "err", err)
+		os.Exit(1)
 	}
+
+	levelVar := new(slog.LevelVar)
+	levelVar.Set(cfg.LogLevel)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: levelVar})).With("node", cfg.Addr)
+	slog.SetDefault(logger)
 
 	st := store.NewSharded(cfg.Shards, cfg.storeOptions()...)
 
@@ -63,7 +69,8 @@ func main() {
 	if cfg.GossipAddr != "" {
 		conn, err := net.ListenPacket("udp", cfg.GossipAddr)
 		if err != nil {
-			log.Fatalf("failed to bind gossip address %s: %v", cfg.GossipAddr, err)
+			logger.Error("failed to bind gossip address", "addr", cfg.GossipAddr, "err", err)
+			os.Exit(1)
 		}
 		addr := conn.LocalAddr().String()
 		// The node ID is the CLIENT (TCP) address, not the gossip addr: the ring
@@ -72,11 +79,11 @@ func main() {
 		// reach us on. NB: cfg.Addr must be routable and unique per node (e.g.
 		// 127.0.0.1:7001) — ":6379" alone won't route a client anywhere.
 		self := cluster.Node{ID: cfg.Addr, Addr: addr, State: cluster.Alive, Incarnation: 1}
-		members = cluster.NewMembers(self)
+		members = cluster.NewMembers(self, logger)
 		gossiper = cluster.NewGossiper(members, conn, cfg.gossiperOptions()...)
 		gossiper.Start()
 
-		router = cluster.NewRouter(members, cfg.Replicas, cfg.RebuildInterval)
+		router = cluster.NewRouter(members, cfg.Replicas, cfg.RebuildInterval, logger)
 		router.Start()
 
 		// The replica set is talked to over the client port, so the coordinator's
@@ -91,32 +98,35 @@ func main() {
 			R:         cfg.ReadQuorum,
 			W:         cfg.WriteQuorum,
 			Telemetry: tel,
+			Logger:    logger,
 		})
-		replayer = server.NewHintReplayer(hints, peer, cfg.HintReplayerInterval)
+		replayer = server.NewHintReplayer(hints, peer, cfg.HintReplayerInterval, logger)
 
 		// Anti-entropy is opt-in — a zero interval disables it. When on, the background loop
 		// periodically Merkle-diffs a peer and reconciles the keys that differ.
 		if cfg.AntiEntropyInterval > 0 {
-			antiEntropy = server.NewAntiEntropy(self.ID, st, peer, members, antiEntropyLeaves, cfg.AntiEntropyInterval)
+			antiEntropy = server.NewAntiEntropy(self.ID, st, peer, members, antiEntropyLeaves, cfg.AntiEntropyInterval, logger)
 		}
 
 		if cfg.TombstoneGCInterval > 0 {
-			tombstoneGC = server.NewTombstoneGC(st, cfg.TombstoneGrace, cfg.TombstoneGCInterval, tel)
+			tombstoneGC = server.NewTombstoneGC(st, cfg.TombstoneGrace, cfg.TombstoneGCInterval, tel, logger)
 		}
 
-		log.Printf("gossip listening on %s", addr)
+		logger.Info("gossip listening", "addr", addr)
 	}
 
 	srvOpts := server.ServerOptions{
 		MaxConns:    cfg.MaxConns,
 		ConnTimeout: cfg.ConnTimeout,
 		Telemetry:   tel,
+		Logger:      logger,
 	}
 	srv := server.NewServer(st, members, router, coordinator, srvOpts)
 	if err := srv.Listen(cfg.Addr); err != nil {
-		log.Fatalf("failed to bind %s: %v", cfg.Addr, err)
+		logger.Error("failed to bind", "addr", cfg.Addr, "err", err)
+		os.Exit(1)
 	}
-	log.Printf("kyria listening on %s", srv.Addr())
+	logger.Info("kyria listening", "addr", srv.Addr())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -126,7 +136,7 @@ func main() {
 
 	select {
 	case <-ctx.Done():
-		log.Println("shutting down…")
+		logger.Info("shutting down")
 		if janitor != nil {
 			janitor.Stop()
 		}
@@ -154,10 +164,11 @@ func main() {
 		}
 
 		if err := srv.Close(); err != nil {
-			log.Printf("close: %v", err)
+			logger.Error("close failed", "err", err)
 		}
 	case err := <-serveErr:
-		log.Fatalf("serve: %v", err)
+		logger.Error("serve failed", "err", err)
+		os.Exit(1)
 	}
 }
 

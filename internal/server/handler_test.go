@@ -25,7 +25,7 @@ func reply(t *testing.T, s store.Store, name string, args ...string) string {
 		byteArgs[i] = []byte(a)
 	}
 
-	v := NewHandler(s, nil, nil, nil, nil).Handle(protocol.Command{Name: name, Args: byteArgs})
+	v := NewHandler(s, nil, nil, nil, nil, nil).Handle(protocol.Command{Name: name, Args: byteArgs})
 
 	var buf bytes.Buffer
 	if err := v.Encode(&buf); err != nil {
@@ -156,13 +156,13 @@ func TestHandle_SetWithTTL_Errors(t *testing.T) {
 // TestHandle_Nodes: with a cluster, NODES replies with one entry per alive member
 // (order is unspecified, so we assert on membership, not exact bytes).
 func TestHandle_Nodes(t *testing.T) {
-	members := cluster.NewMembers(cluster.Node{ID: "self", Addr: "127.0.0.1:7001", State: cluster.Alive, Incarnation: 1})
+	members := cluster.NewMembers(cluster.Node{ID: "self", Addr: "127.0.0.1:7001", State: cluster.Alive, Incarnation: 1}, nil)
 	members.Merge([]cluster.Node{
 		{ID: "peer", Addr: "127.0.0.1:7002", State: cluster.Alive, Incarnation: 1},
 	}, time.Now())
 
 	var buf bytes.Buffer
-	v := NewHandler(store.New(), members, nil, nil, nil).Handle(protocol.Command{Name: "NODES"})
+	v := NewHandler(store.New(), members, nil, nil, nil, nil).Handle(protocol.Command{Name: "NODES"})
 	if err := v.Encode(&buf); err != nil {
 		t.Fatalf("Encode reply: %v", err)
 	}
@@ -191,12 +191,12 @@ func TestHandle_Nodes_Disabled(t *testing.T) {
 // the ring returns is exactly what goes into -MOVED.
 func TestHandle_Redirect(t *testing.T) {
 	// Two-node cluster; this node is "a", peer is "b".
-	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1})
+	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1}, nil)
 	m.Merge([]cluster.Node{{ID: "b", Addr: "b", State: cluster.Alive, Incarnation: 1}}, time.Now())
 	// A long interval + no Start: NewRouter builds the ring once and we never rebuild.
-	router := cluster.NewRouter(m, 50, time.Hour)
+	router := cluster.NewRouter(m, 50, time.Hour, nil)
 
-	h := NewHandler(store.New(), m, router, nil, nil)
+	h := NewHandler(store.New(), m, router, nil, nil, nil)
 
 	send := func(key string) string {
 		var buf bytes.Buffer
@@ -234,10 +234,10 @@ func TestHandle_Redirect(t *testing.T) {
 // set, a higher-clock RSET supersedes the earlier version, and a tombstone RSET buries
 // it (the replica keeps the tombstone rather than dropping the key).
 func TestHandle_VersionedReplicaVerbs(t *testing.T) {
-	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1})
+	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1}, nil)
 	m.Merge([]cluster.Node{{ID: "b", Addr: "b", State: cluster.Alive, Incarnation: 1}}, time.Now())
-	router := cluster.NewRouter(m, 50, time.Hour)
-	h := NewHandler(store.New(), m, router, nil, nil)
+	router := cluster.NewRouter(m, 50, time.Hour, nil)
+	h := NewHandler(store.New(), m, router, nil, nil, nil)
 
 	send := func(name string, args ...[]byte) protocol.Value {
 		return h.Handle(protocol.Command{Name: name, Args: args})
@@ -310,17 +310,17 @@ func TestHandle_VersionedReplicaVerbs(t *testing.T) {
 // in the local store and is fanned out to the peers. (W=3 makes gather wait for both
 // peers, so the replication counts are race-free to assert.)
 func TestHandle_CoordinatesLocalWrite(t *testing.T) {
-	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1})
+	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1}, nil)
 	m.Merge([]cluster.Node{
 		{ID: "b", Addr: "b", State: cluster.Alive, Incarnation: 1},
 		{ID: "c", Addr: "c", State: cluster.Alive, Incarnation: 1},
 	}, time.Now())
-	router := cluster.NewRouter(m, 50, time.Hour)
+	router := cluster.NewRouter(m, 50, time.Hour, nil)
 
 	peer := newFakeReplicator() // every replica acks
 	st := store.New()
 	coord := NewCoordinator("a", router, st, peer, NewHintStore(), CoordinatorOptions{N: 3, R: 2, W: 3})
-	h := NewHandler(st, m, router, coord, nil)
+	h := NewHandler(st, m, router, coord, nil, nil)
 
 	// A key this node owns, so Handle coordinates instead of redirecting.
 	var localKey string
@@ -375,7 +375,7 @@ func commandTotal(t *testing.T, s telemetry.Snapshot, command string) int64 {
 // and an internal RGET is not counted — it is never registered, so telemetry ignores it.
 func TestHandle_TelemetryCountsCommands(t *testing.T) {
 	tel := telemetry.New(ClientCommands...)
-	h := NewHandler(store.New(), nil, nil, nil, tel)
+	h := NewHandler(store.New(), nil, nil, nil, tel, nil)
 
 	h.Handle(protocol.Command{Name: "SET", Args: [][]byte{[]byte("k"), []byte("v")}})
 	h.Handle(protocol.Command{Name: "SET", Args: [][]byte{[]byte("k2"), []byte("v")}})
@@ -399,18 +399,18 @@ func TestHandle_TelemetryCountsCommands(t *testing.T) {
 // early) is still counted — this guards the recorder's placement above the routing block. Under the
 // old placement (below routing) a coordinated op returned before the counter and was never recorded.
 func TestHandle_TelemetryCountsClusteredOps(t *testing.T) {
-	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1})
+	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1}, nil)
 	m.Merge([]cluster.Node{
 		{ID: "b", Addr: "b", State: cluster.Alive, Incarnation: 1},
 		{ID: "c", Addr: "c", State: cluster.Alive, Incarnation: 1},
 	}, time.Now())
-	router := cluster.NewRouter(m, 50, time.Hour)
+	router := cluster.NewRouter(m, 50, time.Hour, nil)
 
 	peer := newFakeReplicator() // every replica acks
 	st := store.New()
 	coord := NewCoordinator("a", router, st, peer, NewHintStore(), CoordinatorOptions{N: 3, R: 2, W: 3})
 	tel := telemetry.New(ClientCommands...)
-	h := NewHandler(st, m, router, coord, tel)
+	h := NewHandler(st, m, router, coord, tel, nil)
 
 	// A key this node owns, so Handle takes the coordinator path (returns before spec.run).
 	var localKey string
@@ -434,7 +434,7 @@ func TestHandle_TelemetryCountsClusteredOps(t *testing.T) {
 // so it gets no row and does not inflate another command's counters.
 func TestHandle_StatsReportsPerCommandRows(t *testing.T) {
 	tel := telemetry.New(ClientCommands...)
-	h := NewHandler(store.New(), nil, nil, nil, tel)
+	h := NewHandler(store.New(), nil, nil, nil, tel, nil)
 
 	h.Handle(protocol.Command{Name: "SET", Args: [][]byte{[]byte("k"), []byte("v")}})
 	h.Handle(protocol.Command{Name: "SET", Args: [][]byte{[]byte("k2"), []byte("v")}})
@@ -469,7 +469,7 @@ func TestHandle_StatsReportsPerCommandRows(t *testing.T) {
 // timing site in Handle actually reaches the per-command histogram.
 func TestHandle_RecordsLatency(t *testing.T) {
 	tel := telemetry.New(ClientCommands...)
-	h := NewHandler(store.New(), nil, nil, nil, tel)
+	h := NewHandler(store.New(), nil, nil, nil, tel, nil)
 
 	h.Handle(protocol.Command{Name: "GET", Args: [][]byte{[]byte("k")}})
 
@@ -489,7 +489,7 @@ func TestHandle_RecordsLatency(t *testing.T) {
 // no per-command knowledge, so a different registration changes the report with no code change.
 func TestHandle_StatsFollowsRegistration(t *testing.T) {
 	tel := telemetry.New(ping) // only PING is tracked here
-	h := NewHandler(store.New(), nil, nil, nil, tel)
+	h := NewHandler(store.New(), nil, nil, nil, tel, nil)
 
 	h.Handle(protocol.Command{Name: "PING"})
 	h.Handle(protocol.Command{Name: "GET", Args: [][]byte{[]byte("k")}}) // handled, but not registered
@@ -511,7 +511,7 @@ func TestHandle_StatsFollowsRegistration(t *testing.T) {
 // still answers STATS instead of panicking — Snapshot is nil-safe, so the reply is the uptime line
 // with no command rows.
 func TestHandle_StatsWithoutTelemetry(t *testing.T) {
-	h := NewHandler(store.New(), nil, nil, nil, nil)
+	h := NewHandler(store.New(), nil, nil, nil, nil, nil)
 
 	var buf bytes.Buffer
 	if err := h.Handle(protocol.Command{Name: "STATS"}).Encode(&buf); err != nil {
@@ -531,7 +531,7 @@ func TestHandle_RecordsHitsAndMisses(t *testing.T) {
 	if _, err := s.Set("present", []byte("v")); err != nil {
 		t.Fatal(err)
 	}
-	h := NewHandler(s, nil, nil, nil, tel)
+	h := NewHandler(s, nil, nil, nil, tel, nil)
 
 	h.Handle(protocol.Command{Name: "GET", Args: [][]byte{[]byte("present")}})  // hit
 	h.Handle(protocol.Command{Name: "GET", Args: [][]byte{[]byte("absent")}})   // miss
@@ -547,7 +547,7 @@ func TestHandle_RecordsHitsAndMisses(t *testing.T) {
 // RED's E, which the traffic counter alone can't show.
 func TestHandle_RecordsErrors(t *testing.T) {
 	tel := telemetry.New(ClientCommands...)
-	h := NewHandler(store.New(), nil, nil, nil, tel)
+	h := NewHandler(store.New(), nil, nil, nil, tel, nil)
 
 	// 3 args clears the arity check (SET takes 2..4) and lands in set's syntax-error branch.
 	h.Handle(protocol.Command{Name: "SET", Args: [][]byte{[]byte("k"), []byte("v"), []byte("BADARG")}})
@@ -562,11 +562,11 @@ func TestHandle_RecordsErrors(t *testing.T) {
 // count as an error — it is a routing outcome, not a failure. Counting it would inflate the error rate
 // every time the ring shifts.
 func TestHandle_MovedIsTrafficNotError(t *testing.T) {
-	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1})
+	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1}, nil)
 	m.Merge([]cluster.Node{{ID: "b", Addr: "b", State: cluster.Alive, Incarnation: 1}}, time.Now())
-	router := cluster.NewRouter(m, 50, time.Hour)
+	router := cluster.NewRouter(m, 50, time.Hour, nil)
 	tel := telemetry.New(ClientCommands...)
-	h := NewHandler(store.New(), m, router, nil, tel)
+	h := NewHandler(store.New(), m, router, nil, tel, nil)
 
 	// A key this node does NOT own, so Handle answers with -MOVED.
 	var remoteKey string
@@ -599,12 +599,12 @@ func TestHandle_MovedIsTrafficNotError(t *testing.T) {
 // error and is recorded as neither a hit nor a miss — so hits+misses stay a count of SUCCESSFUL
 // lookups and the hit ratio derived from them stays meaningful.
 func TestHandle_ErroredGetIsNeitherHitNorMiss(t *testing.T) {
-	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1})
+	m := cluster.NewMembers(cluster.Node{ID: "a", Addr: "a", State: cluster.Alive, Incarnation: 1}, nil)
 	m.Merge([]cluster.Node{
 		{ID: "b", Addr: "b", State: cluster.Alive, Incarnation: 1},
 		{ID: "c", Addr: "c", State: cluster.Alive, Incarnation: 1},
 	}, time.Now())
-	router := cluster.NewRouter(m, 50, time.Hour)
+	router := cluster.NewRouter(m, 50, time.Hour, nil)
 
 	peer := newFakeReplicator()
 	peer.fail["b"] = true // both peers down, so R=3 can never be met
@@ -612,7 +612,7 @@ func TestHandle_ErroredGetIsNeitherHitNorMiss(t *testing.T) {
 	st := store.New()
 	coord := NewCoordinator("a", router, st, peer, NewHintStore(), CoordinatorOptions{N: 3, R: 3, W: 3})
 	tel := telemetry.New(ClientCommands...)
-	h := NewHandler(st, m, router, coord, tel)
+	h := NewHandler(st, m, router, coord, tel, nil)
 
 	var localKey string
 	for i := 0; ; i++ {

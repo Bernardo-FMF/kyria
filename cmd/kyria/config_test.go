@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func TestParseFlags(t *testing.T) {
 		{
 			name: "defaults",
 			args: nil,
-			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second, HintReplayerInterval: time.Second},
+			want: Config{Addr: ":6379", Shards: 32, LogLevel: slog.LevelInfo, Eviction: "none", ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second, HintReplayerInterval: time.Second},
 		},
 		{
 			name: "custom addr and shards",
@@ -43,6 +44,21 @@ func TestParseFlags(t *testing.T) {
 			name: "conn-timeout",
 			args: []string{"-conn-timeout", "30s"},
 			want: Config{Addr: ":6379", Shards: 32, ConnTimeout: 30 * time.Second, Eviction: "none", ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second, HintReplayerInterval: time.Second},
+		},
+		{
+			name: "log-level",
+			args: []string{"-log-level", "debug"},
+			want: Config{Addr: ":6379", Shards: 32, LogLevel: slog.LevelDebug, Eviction: "none", ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second, HintReplayerInterval: time.Second},
+		},
+		{
+			name: "log-level is case-insensitive",
+			args: []string{"-log-level", "WARN"},
+			want: Config{Addr: ":6379", Shards: 32, LogLevel: slog.LevelWarn, Eviction: "none", ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second, HintReplayerInterval: time.Second},
+		},
+		{
+			name: "log-level accepts an offset form",
+			args: []string{"-log-level", "warn+2"},
+			want: Config{Addr: ":6379", Shards: 32, LogLevel: slog.LevelWarn + 2, Eviction: "none", ReapInterval: time.Second, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second, HintReplayerInterval: time.Second},
 		},
 		{
 			name: "lru with cap",
@@ -119,6 +135,8 @@ func TestParseFlags_Errors(t *testing.T) {
 		{"write-quorum below 1", []string{"-write-quorum", "0"}},
 		{"tombstone gc without grace", []string{"-tombstone-gc-interval", "10s"}},
 		{"negative max-conns", []string{"-max-conns", "-1"}},
+		{"unknown log-level", []string{"-log-level", "bogus"}},
+		{"empty log-level", []string{"-log-level", ""}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

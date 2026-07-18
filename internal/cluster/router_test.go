@@ -9,7 +9,7 @@ import (
 
 // membersWith builds a Members with self plus the given extra alive node IDs.
 func membersWith(self string, others ...string) *Members {
-	m := NewMembers(Node{ID: self, Addr: self, State: Alive, Incarnation: 1})
+	m := NewMembers(Node{ID: self, Addr: self, State: Alive, Incarnation: 1}, nil)
 	if len(others) > 0 {
 		nodes := make([]Node, len(others))
 		for i, id := range others {
@@ -23,10 +23,10 @@ func membersWith(self string, others ...string) *Members {
 // TestRouter_Owner: Owner returns a node from the alive set, and IsLocal agrees with it.
 func TestRouter_Owner(t *testing.T) {
 	m := membersWith("a", "b", "c")
-	r := NewRouter(m, 50, time.Second)
+	r := NewRouter(m, 50, time.Second, nil)
 
 	alive := map[string]bool{"a": true, "b": true, "c": true}
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		key := fmt.Sprintf("key-%d", i)
 		owner, ok := r.Owner(key)
 		if !ok || !alive[owner] {
@@ -42,9 +42,9 @@ func TestRouter_Owner(t *testing.T) {
 // keys route to the newcomer (before, self owned everything).
 func TestRouter_ReflectsMembership(t *testing.T) {
 	m := membersWith("a")
-	r := NewRouter(m, 50, time.Second)
+	r := NewRouter(m, 50, time.Second, nil)
 
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		if !r.IsLocal(fmt.Sprintf("key-%d", i)) {
 			t.Fatal("with only self alive, self should own every key")
 		}
@@ -54,7 +54,7 @@ func TestRouter_ReflectsMembership(t *testing.T) {
 	r.rebuild()
 
 	ownedByB := 0
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		if owner, _ := r.Owner(fmt.Sprintf("key-%d", i)); owner == "b" {
 			ownedByB++
 		}
@@ -69,17 +69,17 @@ func TestRouter_ReflectsMembership(t *testing.T) {
 // proves the atomic ring swap needs no lock on the read path.
 func TestRouter_ConcurrentAccess(t *testing.T) {
 	m := membersWith("a", "b")
-	r := NewRouter(m, 30, 5*time.Millisecond)
+	r := NewRouter(m, 30, 5*time.Millisecond, nil)
 	r.Start()
 	defer r.Stop()
 
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
 			now := time.Now()
-			for j := 0; j < 500; j++ {
+			for j := range 500 {
 				key := fmt.Sprintf("k-%d-%d", i, j)
 				_, _ = r.Owner(key)
 				_ = r.IsLocal(key)
@@ -95,9 +95,9 @@ func TestRouter_ConcurrentAccess(t *testing.T) {
 // same node the coordinator logic treats as replica 0.
 func TestRouter_Owners(t *testing.T) {
 	m := membersWith("a", "b", "c", "d")
-	r := NewRouter(m, 50, time.Second)
+	r := NewRouter(m, 50, time.Second, nil)
 
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		key := fmt.Sprintf("key-%d", i)
 		got := r.Owners(key, 3)
 

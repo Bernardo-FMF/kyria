@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/Bernardo-FMF/kyria/internal/cluster"
@@ -17,6 +18,7 @@ type Config struct {
 	Shards      int           // number of lock-striped shards (concurrency)
 	MaxConns    int           // max concurrent client connections; 0 = unlimited
 	ConnTimeout time.Duration // per-connection idle read + write timeout; 0 = no timeout
+	LogLevel    slog.Level    // minimum level the logger emits, parsed from -log-level
 
 	Eviction             string        // "none" | "lru" | "lfu" | "tinylfu"
 	MaxEntries           int           // PER-SHARD entry cap; 0 = unbounded (no eviction)
@@ -58,6 +60,7 @@ func parseFlags(args []string) (Config, error) {
 	shards := fs.Int("shards", 32, "number of shards")
 	maxConns := fs.Int("max-conns", 0, "max concurrent client connections (0 = unlimited)")
 	connTimeout := fs.Duration("conn-timeout", 0, "per-connection idle read + write timeout (0 = none)")
+	logLevel := fs.String("log-level", "info", "debug|info|warn|error")
 	eviction := fs.String("eviction", "none", "none|lru|lfu|tinylfu")
 	maxEntries := fs.Int("max-entries", 0, "per-shard entry cap (0 = unbounded)")
 	maxValueSize := fs.Int("max-value-size", 0, "max value bytes (0 = store default)")
@@ -83,11 +86,20 @@ func parseFlags(args []string) (Config, error) {
 		return Config{}, err
 	}
 
+	// slog.Level is a TextUnmarshaler, so it does the parsing and the validation: it accepts the
+	// four level names case-insensitively, plus offset forms like "warn+2". The underlying error
+	// names the offending string but not the valid set, so we replace it rather than wrap it.
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(*logLevel)); err != nil {
+		return Config{}, fmt.Errorf("unknown -log-level %q (want debug, info, warn, or error)", *logLevel)
+	}
+
 	cfg := Config{
 		Addr:                 *addr,
 		Shards:               *shards,
 		MaxConns:             *maxConns,
 		ConnTimeout:          *connTimeout,
+		LogLevel:             level,
 		Eviction:             *eviction,
 		MaxEntries:           *maxEntries,
 		MaxValueSize:         *maxValueSize,

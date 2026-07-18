@@ -26,7 +26,7 @@ func find(t *testing.T, m *Members, id string) Node {
 
 // TestMerge_AddsUnknownNode: a gossiped node we've never heard of is added.
 func TestMerge_AddsUnknownNode(t *testing.T) {
-	m := NewMembers(node("self", Alive, 1))
+	m := NewMembers(node("self", Alive, 1), nil)
 	m.Merge([]Node{node("b", Alive, 1)}, time.Now())
 
 	if got := find(t, m, "b"); got.State != Alive || got.Incarnation != 1 {
@@ -37,7 +37,7 @@ func TestMerge_AddsUnknownNode(t *testing.T) {
 // TestMerge_HigherIncarnationWins: a strictly newer incarnation is always adopted,
 // whatever the state.
 func TestMerge_HigherIncarnationWins(t *testing.T) {
-	m := NewMembers(node("self", Alive, 1))
+	m := NewMembers(node("self", Alive, 1), nil)
 	now := time.Now()
 
 	m.Merge([]Node{node("b", Alive, 1)}, now)
@@ -50,7 +50,7 @@ func TestMerge_HigherIncarnationWins(t *testing.T) {
 
 // TestMerge_LowerIncarnationIgnored: stale gossip (older incarnation) is dropped.
 func TestMerge_LowerIncarnationIgnored(t *testing.T) {
-	m := NewMembers(node("self", Alive, 1))
+	m := NewMembers(node("self", Alive, 1), nil)
 	now := time.Now()
 
 	m.Merge([]Node{node("b", Alive, 5)}, now)
@@ -63,7 +63,7 @@ func TestMerge_LowerIncarnationIgnored(t *testing.T) {
 
 // TestMerge_EqualIncarnationDeaderWins: on an incarnation tie, the deader state wins.
 func TestMerge_EqualIncarnationDeaderWins(t *testing.T) {
-	m := NewMembers(node("self", Alive, 1))
+	m := NewMembers(node("self", Alive, 1), nil)
 	now := time.Now()
 
 	m.Merge([]Node{node("b", Alive, 4)}, now)
@@ -77,7 +77,7 @@ func TestMerge_EqualIncarnationDeaderWins(t *testing.T) {
 // TestMerge_RefutesFalseSelfClaim: gossip that says self is dead must be refuted —
 // self stays Alive and raises its incarnation above the false claim.
 func TestMerge_RefutesFalseSelfClaim(t *testing.T) {
-	m := NewMembers(node("self", Alive, 1))
+	m := NewMembers(node("self", Alive, 1), nil)
 	m.Merge([]Node{node("self", Dead, 5)}, time.Now())
 
 	got := find(t, m, "self")
@@ -91,7 +91,7 @@ func TestMerge_RefutesFalseSelfClaim(t *testing.T) {
 
 // TestBump_RaisesSelfIncarnation: each heartbeat raises self's incarnation.
 func TestBump_RaisesSelfIncarnation(t *testing.T) {
-	m := NewMembers(node("self", Alive, 1))
+	m := NewMembers(node("self", Alive, 1), nil)
 	m.Bump(time.Now())
 
 	if got := find(t, m, "self"); got.Incarnation != 2 {
@@ -102,7 +102,7 @@ func TestBump_RaisesSelfIncarnation(t *testing.T) {
 // TestDetectFailures_MarksStaleNodesDead: an alive node whose last update is older
 // than the timeout is marked Dead; one seen within the timeout stays Alive.
 func TestDetectFailures_MarksStaleNodesDead(t *testing.T) {
-	m := NewMembers(node("self", Alive, 1))
+	m := NewMembers(node("self", Alive, 1), nil)
 	base := time.Now()
 
 	m.Merge([]Node{node("b", Alive, 1)}, base)                    // b last seen at base
@@ -121,7 +121,7 @@ func TestDetectFailures_MarksStaleNodesDead(t *testing.T) {
 // TestDetectFailures_NeverMarksSelf: self is never failure-detected, even if its
 // lastSeen is arbitrarily old.
 func TestDetectFailures_NeverMarksSelf(t *testing.T) {
-	m := NewMembers(node("self", Alive, 1))
+	m := NewMembers(node("self", Alive, 1), nil)
 	m.DetectFailures(time.Now().Add(time.Hour), time.Second)
 
 	if got := find(t, m, "self"); got.State != Alive {
@@ -131,7 +131,7 @@ func TestDetectFailures_NeverMarksSelf(t *testing.T) {
 
 // TestAlive_ReturnsOnlyAliveMembers: Alive() excludes dead members.
 func TestAlive_ReturnsOnlyAliveMembers(t *testing.T) {
-	m := NewMembers(node("self", Alive, 1))
+	m := NewMembers(node("self", Alive, 1), nil)
 	m.Merge([]Node{node("b", Alive, 1), node("c", Dead, 1)}, time.Now())
 
 	ids := map[string]bool{}
@@ -146,7 +146,7 @@ func TestAlive_ReturnsOnlyAliveMembers(t *testing.T) {
 // TestSnapshot_ReturnsEachMemberOnce guards the make-length bug: Snapshot must
 // return exactly one Node per member, with no zero-value phantoms.
 func TestSnapshot_ReturnsEachMemberOnce(t *testing.T) {
-	m := NewMembers(node("self", Alive, 1))
+	m := NewMembers(node("self", Alive, 1), nil)
 	m.Merge([]Node{node("b", Alive, 1), node("c", Dead, 1)}, time.Now())
 
 	got := m.Snapshot()
@@ -164,10 +164,10 @@ func TestSnapshot_ReturnsEachMemberOnce(t *testing.T) {
 // race detector (and Go's concurrent-map-write panic) guard the locking. Only
 // meaningful under `go test -race`.
 func TestMembers_ConcurrentAccess(t *testing.T) {
-	m := NewMembers(node("self", Alive, 1))
+	m := NewMembers(node("self", Alive, 1), nil)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()

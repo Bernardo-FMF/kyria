@@ -21,7 +21,7 @@ func TestHandle_RBucket(t *testing.T) {
 	s.Set("a", versionBlob("1"))
 	s.Set("b", versionBlob("2"))
 	s.Set("c", versionBlob("3"))
-	h := NewHandler(s, nil, nil, nil, nil)
+	h := NewHandler(s, nil, nil, nil, nil, nil)
 
 	bucketer := merkle.New(leaves)
 	want := bucketer.Bucket("a")

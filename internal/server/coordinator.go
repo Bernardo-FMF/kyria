@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -36,6 +37,8 @@ type Coordinator struct {
 	// telemetry records replication events (hints parked, read-repairs, admission rejects). May be
 	// nil — the Record calls are no-ops on a nil receiver — which is how tests skip instrumentation.
 	telemetry *telemetry.Telemetry
+	// logger is never nil; NewCoordinator substitutes slog.Default().
+	logger *slog.Logger
 }
 
 // CoordinatorOptions carries the quorum tunables and injected collaborators, bundled into one struct
@@ -44,12 +47,18 @@ type Coordinator struct {
 type CoordinatorOptions struct {
 	N, R, W   int                  // replication factor, read quorum, write quorum
 	Telemetry *telemetry.Telemetry // may be nil → recording is a no-op
+	Logger    *slog.Logger         // may be nil → slog.Default()
 }
 
 // NewCoordinator returns a Coordinator over the local store, configured by opts. self is this node's
 // client address, excluded from fan-out. hints is shared with the HintReplayer: write parks a hint
 // here for any replica it can't reach.
 func NewCoordinator(self string, router *cluster.Router, store store.Store, peer replicator, hints *hintStore, opts CoordinatorOptions) *Coordinator {
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	return &Coordinator{
 		self:      self,
 		router:    router,
@@ -60,6 +69,7 @@ func NewCoordinator(self string, router *cluster.Router, store store.Store, peer
 		r:         opts.R,
 		w:         opts.W,
 		telemetry: opts.Telemetry,
+		logger:    logger.With("component", "coordinator"),
 	}
 }
 
@@ -99,6 +109,7 @@ func (c *Coordinator) write(key string, value []byte) protocol.Value {
 
 	if !admitted {
 		c.telemetry.RecordEvent(evAdmissionRejects)
+		c.logger.Warn("write not admitted by the store policy", "key", key, "op", "set")
 	}
 
 	blob := version.Encode([]version.Version{{Value: value, Clock: newClock}})
@@ -115,6 +126,8 @@ func (c *Coordinator) write(key string, value []byte) protocol.Value {
 		if err != nil {
 			c.hints.add(addr, key, blob)
 			c.telemetry.RecordEvent(evHintsParked)
+			c.logger.Warn("replica unreachable, hint parked",
+				"key", key, "replica", addr, "op", "set", "err", err)
 			return false
 		}
 		return true
@@ -124,6 +137,7 @@ func (c *Coordinator) write(key string, value []byte) protocol.Value {
 		return protocol.SimpleString("OK")
 	}
 
+	c.logger.Warn("write quorum not met", "key", key, "acks", acks, "need", need)
 	return quorumError("write", acks, need)
 }
 
@@ -154,6 +168,7 @@ func (c *Coordinator) delete(key string) protocol.Value {
 
 	if !admitted {
 		c.telemetry.RecordEvent(evAdmissionRejects)
+		c.logger.Warn("write not admitted by the store policy", "key", key, "op", "del")
 	}
 
 	blob := version.Encode([]version.Version{version.Tombstone(newClock, deletedAt)})
@@ -165,6 +180,8 @@ func (c *Coordinator) delete(key string) protocol.Value {
 		if err != nil {
 			c.hints.add(addr, key, blob)
 			c.telemetry.RecordEvent(evHintsParked)
+			c.logger.Warn("replica unreachable, hint parked",
+				"key", key, "replica", addr, "op", "del", "err", err)
 			return false
 		}
 		return true
@@ -175,6 +192,7 @@ func (c *Coordinator) delete(key string) protocol.Value {
 		return protocol.Integer(opState)
 	}
 
+	c.logger.Warn("delete quorum not met", "key", key, "acks", acks, "need", need)
 	return quorumError("delete", acks, need)
 }
 
@@ -212,10 +230,15 @@ func (c *Coordinator) read(key string) protocol.Value {
 			go func(addr string) {
 				d, _, err := c.peer.Get(addr, key)
 				if err != nil {
+					c.logger.Debug("replica read failed", "key", key, "replica", addr, "err", err)
 					results <- peerResult{ok: false}
 					return
 				}
 				v, err := version.Decode(d)
+				if err != nil {
+					c.logger.Warn("replica returned an undecodable blob",
+						"key", key, "replica", addr, "err", err)
+				}
 				results <- peerResult{versions: v, ok: err == nil, addr: addr}
 			}(addr)
 		}
@@ -243,6 +266,7 @@ func (c *Coordinator) read(key string) protocol.Value {
 	}
 
 	if responses < need {
+		c.logger.Warn("read quorum not met", "key", key, "responses", responses, "need", need)
 		return quorumError("read", responses, need)
 	}
 
@@ -274,6 +298,7 @@ func (c *Coordinator) readRepair(key string, merged []version.Version, responder
 		}
 
 		c.telemetry.RecordEvent(evReadRepairs)
+		c.logger.Debug("repairing replica", "key", key, "replica", addr)
 		if addr == c.self {
 			c.store.Update(key, func(old []byte) []byte {
 				existing, _ := version.Decode(old)

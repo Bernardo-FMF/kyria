@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"errors"
+	"log/slog"
 	"net"
 	"sync"
 	"time"
@@ -43,12 +44,13 @@ type ServerOptions struct {
 	MaxConns    int                  // 0 = unlimited
 	ConnTimeout time.Duration        // 0 = no timeout
 	Telemetry   *telemetry.Telemetry // may be nil → recording is a no-op
+	Logger      *slog.Logger         // may be nil → slog.Default()
 }
 
 // NewServer returns a Server that dispatches commands against store, configured by opts. Call Listen
 // then Serve to run it. members, router, and coordinator may be nil (standalone).
 func NewServer(store store.Store, members *cluster.Members, router *cluster.Router, coordinator *Coordinator, opts ServerOptions) *Server {
-	handler := NewHandler(store, members, router, coordinator, opts.Telemetry)
+	handler := NewHandler(store, members, router, coordinator, opts.Telemetry, opts.Logger)
 	conns := make(map[net.Conn]struct{}, 10)
 
 	var sem chan struct{}

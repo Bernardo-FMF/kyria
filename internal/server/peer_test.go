@@ -150,7 +150,7 @@ func TestPeer_ConcurrentUse(t *testing.T) {
 	peer := NewPeer(2 * time.Second)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()

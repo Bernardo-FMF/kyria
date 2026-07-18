@@ -16,7 +16,7 @@ func TestHandle_RTree(t *testing.T) {
 	s := store.New()
 	s.Set("a", versionBlob("1"))
 	s.Set("b", versionBlob("2"))
-	h := NewHandler(s, nil, nil, nil, nil)
+	h := NewHandler(s, nil, nil, nil, nil, nil)
 
 	const leaves = 64
 	reply := h.Handle(protocol.Command{Name: "RTREE", Args: [][]byte{[]byte(strconv.Itoa(leaves))}})

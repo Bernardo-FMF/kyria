@@ -27,7 +27,7 @@ func TestRing_Deterministic(t *testing.T) {
 	}
 	r1, r2 := build(), build()
 
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		k := fmt.Sprintf("key-%d", i)
 		n1, _ := r1.Get(k)
 		n2, _ := r2.Get(k)
@@ -47,7 +47,7 @@ func TestRing_DistributesAcrossNodes(t *testing.T) {
 	}
 
 	counts := map[string]int{}
-	for i := 0; i < 10000; i++ {
+	for i := range 10000 {
 		owner, _ := r.Get(fmt.Sprintf("key-%d", i))
 		counts[owner]++
 	}
@@ -69,7 +69,7 @@ func TestRing_MinimalRemapping(t *testing.T) {
 	}
 
 	before := map[string]string{}
-	for i := 0; i < 2000; i++ {
+	for i := range 2000 {
 		k := fmt.Sprintf("key-%d", i)
 		owner, _ := r.Get(k)
 		before[k] = owner
@@ -102,7 +102,7 @@ func TestRing_GetN_DistinctReplicas(t *testing.T) {
 		r.SortedAdd(n)
 	}
 
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		key := fmt.Sprintf("key-%d", i)
 		got := r.GetN(key, 3)
 

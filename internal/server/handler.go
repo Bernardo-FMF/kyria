@@ -5,6 +5,7 @@ package server
 
 import (
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -119,17 +120,25 @@ type Handler struct {
 	// telemetry records per-command counters for the STATS verb. May be nil — the Record calls are
 	// no-ops on a nil receiver — which is how standalone construction and tests skip instrumentation.
 	telemetry *telemetry.Telemetry
+	// logger is never nil; NewHandler substitutes slog.Default().
+	logger *slog.Logger
 }
 
 // NewHandler returns a Handler backed by s. members, router, and coordinator may be
 // nil, which disables NODES, key routing, and replication respectively (standalone).
-func NewHandler(store store.Store, members *cluster.Members, router *cluster.Router, coordinator *Coordinator, telemetry *telemetry.Telemetry) *Handler {
+// A nil logger falls back to slog.Default().
+func NewHandler(store store.Store, members *cluster.Members, router *cluster.Router, coordinator *Coordinator, telemetry *telemetry.Telemetry, logger *slog.Logger) *Handler {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	return &Handler{
 		store:       store,
 		members:     members,
 		router:      router,
 		coordinator: coordinator,
 		telemetry:   telemetry,
+		logger:      logger.With("component", "handler"),
 	}
 }
 
@@ -155,6 +164,11 @@ func (h *Handler) Handle(cmd protocol.Command) protocol.Value {
 	// correct, since this node never served it.
 	s := time.Now()
 
+	var key string
+	if spec.clusteredOp {
+		key = string(cmd.Args[0])
+	}
+
 	// Routing: in a cluster, a command whose key this node does not own is answered
 	// with a -MOVED redirect to the owner instead of served here. owner is the
 	// owner's client address (the node ID is its TCP addr), so it drops straight
@@ -162,7 +176,6 @@ func (h *Handler) Handle(cmd protocol.Command) protocol.Value {
 	// not an ERR. Standalone nodes (router == nil) and keyless commands skip this
 	// and always serve locally; an empty ring (!ok) falls through and serves locally.
 	if h.router != nil && spec.clusteredOp {
-		key := string(cmd.Args[0])
 		if !h.router.IsLocal(key) {
 			if owner, ok := h.router.Owner(key); ok {
 				return protocol.Error("MOVED " + owner)
@@ -174,11 +187,11 @@ func (h *Handler) Handle(cmd protocol.Command) protocol.Value {
 		// they never reach here — they fall through to the plain local spec.run below,
 		// which is what keeps a replicated write from re-replicating.)
 		if h.coordinator != nil {
-			return h.recordOutcome(name, h.coordinator.coordinate(cmd), s)
+			return h.recordOutcome(name, key, h.coordinator.coordinate(cmd), s)
 		}
 	}
 
-	return h.recordOutcome(name, spec.run(h, cmd.Args), s)
+	return h.recordOutcome(name, key, spec.run(h, cmd.Args), s)
 }
 
 // ping replies +PONG.
@@ -359,19 +372,27 @@ func (h *Handler) stats(args [][]byte) protocol.Value {
 // whether its bulk reply carries a value. Two consequences of where it is called from: a -MOVED
 // redirect returns before this, so a redirect counts as traffic but never as a failure; and an errored
 // GET is neither a hit nor a miss, which keeps hits+misses a count of SUCCESSFUL lookups.
-func (h *Handler) recordOutcome(name string, reply protocol.Value, start time.Time) protocol.Value {
-	h.telemetry.RecordDuration(name, time.Since(start))
+func (h *Handler) recordOutcome(name, key string, reply protocol.Value, start time.Time) protocol.Value {
+	elapsed := time.Since(start)
+	h.telemetry.RecordDuration(name, elapsed)
 
-	if _, isErr := reply.AsError(); isErr {
+	outcome := "ok"
+	switch _, isErr := reply.AsError(); {
+	case isErr:
 		h.telemetry.RecordError(name)
-		return reply
-	}
-	if name == get {
+		outcome = "error"
+	case name == get:
 		if _, ok := reply.AsBulk(); ok {
 			h.telemetry.RecordHit(name)
+			outcome = "hit"
 		} else {
 			h.telemetry.RecordMiss(name)
+			outcome = "miss"
 		}
+	}
+
+	if key != "" {
+		h.logger.Debug("request", "cmd", name, "key", key, "outcome", outcome, "duration", elapsed)
 	}
 	return reply
 }

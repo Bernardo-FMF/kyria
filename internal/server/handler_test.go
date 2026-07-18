@@ -422,3 +422,73 @@ func TestHandle_TelemetryCountsClusteredOps(t *testing.T) {
 		t.Errorf("coordinated SET total = %d, want 1 (clustered ops must be counted)", got)
 	}
 }
+
+// TestHandle_StatsReportsPerCommandRows: STATS returns an uptime line plus one row per REGISTERED
+// command (including ones never used, which report zeros). An internal verb like RGET is unregistered,
+// so it gets no row and does not inflate another command's counters.
+func TestHandle_StatsReportsPerCommandRows(t *testing.T) {
+	tel := telemetry.New(ClientCommands...)
+	h := NewHandler(store.New(), nil, nil, nil, tel)
+
+	h.Handle(protocol.Command{Name: "SET", Args: [][]byte{[]byte("k"), []byte("v")}})
+	h.Handle(protocol.Command{Name: "SET", Args: [][]byte{[]byte("k2"), []byte("v")}})
+	h.Handle(protocol.Command{Name: "GET", Args: [][]byte{[]byte("k")}})
+	h.Handle(protocol.Command{Name: "RGET", Args: [][]byte{[]byte("k")}}) // never registered
+
+	var buf bytes.Buffer
+	if err := h.Handle(protocol.Command{Name: "STATS"}).Encode(&buf); err != nil {
+		t.Fatalf("Encode STATS: %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		"uptime_seconds:",
+		"GET total=1 hits=0 misses=0 errors=0\r\n",
+		"SET total=2 hits=0 misses=0 errors=0\r\n",
+		"DEL total=0 hits=0 misses=0 errors=0\r\n", // registered but unused
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("STATS reply %q is missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "RGET") {
+		t.Errorf("STATS reply %q includes RGET; internal verbs must never be reported", got)
+	}
+}
+
+// TestHandle_StatsFollowsRegistration: the rows come from whatever was registered — stats itself has
+// no per-command knowledge, so a different registration changes the report with no code change.
+func TestHandle_StatsFollowsRegistration(t *testing.T) {
+	tel := telemetry.New(ping) // only PING is tracked here
+	h := NewHandler(store.New(), nil, nil, nil, tel)
+
+	h.Handle(protocol.Command{Name: "PING"})
+	h.Handle(protocol.Command{Name: "GET", Args: [][]byte{[]byte("k")}}) // handled, but not registered
+
+	var buf bytes.Buffer
+	if err := h.Handle(protocol.Command{Name: "STATS"}).Encode(&buf); err != nil {
+		t.Fatalf("Encode STATS: %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "PING total=1") {
+		t.Errorf("STATS reply %q is missing the registered PING row", got)
+	}
+	if strings.Contains(got, "GET total=") {
+		t.Errorf("STATS reply %q reports GET, which was never registered", got)
+	}
+}
+
+// TestHandle_StatsWithoutTelemetry: a Handler built with nil telemetry (what ServerOptions{} yields)
+// still answers STATS instead of panicking — Snapshot is nil-safe, so the reply is the uptime line
+// with no command rows.
+func TestHandle_StatsWithoutTelemetry(t *testing.T) {
+	h := NewHandler(store.New(), nil, nil, nil, nil)
+
+	var buf bytes.Buffer
+	if err := h.Handle(protocol.Command{Name: "STATS"}).Encode(&buf); err != nil {
+		t.Fatalf("Encode STATS: %v", err)
+	}
+	if got := buf.String(); !strings.Contains(got, "uptime_seconds:0\r\n") {
+		t.Errorf("STATS without telemetry = %q, want just the uptime line", got)
+	}
+}

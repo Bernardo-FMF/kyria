@@ -316,8 +316,15 @@ func (h *Handler) rbucket(args [][]byte) protocol.Value {
 }
 
 // stats replies with this node's telemetry as an INFO-style bulk string — one `key:value` line per
-// counter (uptime plus the GET/SET/DEL totals).
+// counter (uptime plus the counters for each command).
 func (h *Handler) stats(args [][]byte) protocol.Value {
-	//TODO
-	return protocol.Value{}
+	s := h.telemetry.Snapshot()
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "uptime_seconds:%d\r\n", int64(s.Uptime.Seconds()))
+	for _, c := range s.Commands {
+		fmt.Fprintf(&b, "%s total=%d hits=%d misses=%d errors=%d\r\n",
+			c.Command, c.Total, c.Hits, c.Misses, c.Errors)
+	}
+	return protocol.BulkString([]byte(b.String()))
 }

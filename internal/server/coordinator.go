@@ -310,7 +310,19 @@ func (c *Coordinator) readRepair(key string, merged []version.Version, responder
 
 // gather runs op against each peer concurrently and returns the ack count — starting
 // at 1 for the local replica — stopping as soon as need is reached, so one slow or
-// dead replica can't hold up an already-met quorum.
+// dead replica can't hold up an already-met quorum. The check sits at the top of the
+// loop so an already-met quorum returns without receiving at all.
+//
+// Counting the local replica requires that the caller has ALREADY applied the write
+// locally: write and delete do so through store.UpdateReplica, which cannot soft-fail
+// (it returns only an error, which they return on) so reaching here means the local copy
+// exists. A caller that used Update instead could be told !admitted and still arrive here,
+// making this count an ack it never earned.
+//
+// op runs for every peer regardless of need — the fan-out is the replication itself, and
+// is where hints are parked for unreachable replicas. need governs when we reply, never
+// whether we replicate. Abandoning the remaining results is safe because the channel is
+// buffered to len(peers), so those sends never block.
 func (c *Coordinator) gather(peers []string, need int, op func(addr string) bool) int {
 	results := make(chan bool, len(peers))
 	for _, peer := range peers {
@@ -321,11 +333,11 @@ func (c *Coordinator) gather(peers []string, need int, op func(addr string) bool
 
 	acks := 1
 	for range peers {
-		if <-results {
-			acks++
-		}
 		if acks >= need {
 			break
+		}
+		if <-results {
+			acks++
 		}
 	}
 	return acks

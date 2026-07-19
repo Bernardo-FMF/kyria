@@ -6,6 +6,8 @@ CMD     := ./cmd/kyria        # entrypoint (added in a later phase)
 BINARY  := kyria
 BIN_DIR := bin
 COVER   := coverage.out
+IMAGE   ?= kyria
+TAG     ?= dev
 
 .DEFAULT_GOAL := help
 
@@ -65,6 +67,22 @@ fmt-check: ## Fail if any file is not gofmt-formatted
 tidy: ## Sync go.mod / go.sum
 	$(GO) mod tidy
 
+## ---- docker --------------------------------------------------------------
+
+.PHONY: image
+image: ## Build the container image (override with IMAGE= / TAG=)
+	docker build -t $(IMAGE):$(TAG) .
+
+.PHONY: image-size
+image-size: ## Show the built image's size
+	@docker image ls $(IMAGE):$(TAG) --format '{{.Repository}}:{{.Tag}}  {{.Size}}'
+
+# Standalone, so -addr keeps its default ":6379". Binding the wildcard is what a published
+# port needs — the routable-host rule only applies once -gossip-addr enables clustering.
+.PHONY: docker-run
+docker-run: ## Run a single standalone node in a container on :6379
+	docker run --rm -p 6379:6379 -e KYRIA_LOG_LEVEL=debug $(IMAGE):$(TAG)
+
 ## ---- housekeeping --------------------------------------------------------
 
 .PHONY: clean
@@ -75,4 +93,4 @@ clean: ## Remove build and coverage artifacts
 help: ## Show this help
 	@echo "kyria — available targets:"
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'

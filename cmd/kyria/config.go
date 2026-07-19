@@ -4,6 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/Bernardo-FMF/kyria/internal/cluster"
@@ -86,6 +89,27 @@ func parseFlags(args []string) (Config, error) {
 		return Config{}, err
 	}
 
+	seen := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { seen[f.Name] = true })
+
+	var envErr error
+	fs.VisitAll(func(f *flag.Flag) {
+		if envErr != nil || seen[f.Name] {
+			return
+		}
+		key := "KYRIA_" + strings.ToUpper(strings.ReplaceAll(f.Name, "-", "_"))
+		v, ok := os.LookupEnv(key)
+		if !ok {
+			return
+		}
+		if err := fs.Set(f.Name, v); err != nil {
+			envErr = fmt.Errorf("%s=%q: %w", key, v, err)
+		}
+	})
+	if envErr != nil {
+		return Config{}, envErr
+	}
+
 	// slog.Level is a TextUnmarshaler, so it does the parsing and the validation: it accepts the
 	// four level names case-insensitively, plus offset forms like "warn+2". The underlying error
 	// names the offending string but not the valid set, so we replace it rather than wrap it.
@@ -127,6 +151,15 @@ func parseFlags(args []string) (Config, error) {
 		// ok
 	default:
 		return Config{}, fmt.Errorf("unknown -eviction %q (want none, lru, lfu, or tinylfu)", cfg.Eviction)
+	}
+
+	if cfg.GossipAddr != "" {
+		if err := routableHost("-addr", cfg.Addr); err != nil {
+			return Config{}, err
+		}
+		if err := routableHost("-gossip-addr", cfg.GossipAddr); err != nil {
+			return Config{}, err
+		}
 	}
 
 	if cfg.Eviction != "none" && cfg.MaxEntries <= 0 {
@@ -214,4 +247,19 @@ func (c Config) gossiperOptions() []cluster.GossiperOption {
 	}
 
 	return opts
+}
+
+// routableHost rejects an address other nodes could not reach us at. Used for the values
+// kyria advertises: -addr becomes the node's ring identity, the target of a -MOVED reply,
+// and the address peers dial; -gossip-addr comes back from conn.LocalAddr() as the contact
+// address peers send UDP to.
+func routableHost(flagName, value string) error {
+	host, _, err := net.SplitHostPort(value)
+	if err != nil {
+		return fmt.Errorf("%s %q: %w", flagName, value, err)
+	}
+	if host == "" || net.ParseIP(host).IsUnspecified() {
+		return fmt.Errorf("%s needs a routable host when clustering is enabled, got %q", flagName, value)
+	}
+	return nil
 }

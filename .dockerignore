@@ -1,0 +1,27 @@
+# Keep the build context to what `go build ./cmd/kyria` actually needs.
+# .git alone is ~1.8M of the 2.4M repo.
+.git
+.gitignore
+
+# Local build artifacts — the image builds its own binary.
+bin/
+kyria
+coverage.out
+*.out
+*.test
+*.prof
+
+# Docker and CI files: changing them should not invalidate the build cache.
+Dockerfile
+.dockerignore
+docker-compose.yml
+Makefile
+.github/
+
+# Docs and editor state.
+README.md
+docs/
+*.md
+.vscode/
+.idea/
+.DS_Store

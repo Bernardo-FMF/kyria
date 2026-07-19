@@ -2,6 +2,7 @@ package main
 
 import (
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,9 +82,11 @@ func TestParseFlags(t *testing.T) {
 			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: 500 * time.Millisecond, Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second, HintReplayerInterval: time.Second},
 		},
 		{
+			// -addr is spelled out because enabling gossip makes it an advertised value: the
+			// default ":6379" names no host, so peers would have nothing to reach this node at.
 			name: "gossip flags",
-			args: []string{"-gossip-addr", "127.0.0.1:7946", "-seeds", "10.0.0.1:7946,10.0.0.2:7946"},
-			want: Config{Addr: ":6379", Shards: 32, Eviction: "none", ReapInterval: time.Second, GossipAddr: "127.0.0.1:7946", Seeds: "10.0.0.1:7946,10.0.0.2:7946", Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second, HintReplayerInterval: time.Second},
+			args: []string{"-addr", "127.0.0.1:6379", "-gossip-addr", "127.0.0.1:7946", "-seeds", "10.0.0.1:7946,10.0.0.2:7946"},
+			want: Config{Addr: "127.0.0.1:6379", Shards: 32, Eviction: "none", ReapInterval: time.Second, GossipAddr: "127.0.0.1:7946", Seeds: "10.0.0.1:7946,10.0.0.2:7946", Replicas: 100, RebuildInterval: time.Second, ReplicationFactor: 3, ReadQuorum: 2, WriteQuorum: 2, ReplicaTimeout: 2 * time.Second, HintReplayerInterval: time.Second},
 		},
 		{
 			name: "gossip timing flags",
@@ -142,6 +145,133 @@ func TestParseFlags_Errors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := parseFlags(tc.args); err == nil {
 				t.Errorf("parseFlags(%v) = nil error, want an error", tc.args)
+			}
+		})
+	}
+}
+
+// TestParseFlags_Environment covers the KYRIA_* fallback, which exists so a container can be
+// configured with -e instead of a long argv. The contract is flag > env > default.
+func TestParseFlags_Environment(t *testing.T) {
+	t.Run("fills a flag that was not given", func(t *testing.T) {
+		t.Setenv("KYRIA_SHARDS", "8")
+		cfg, err := parseFlags(nil)
+		if err != nil {
+			t.Fatalf("parseFlags: %v", err)
+		}
+		if cfg.Shards != 8 {
+			t.Errorf("Shards = %d, want 8 from the environment", cfg.Shards)
+		}
+	})
+
+	t.Run("an explicit flag beats the environment", func(t *testing.T) {
+		t.Setenv("KYRIA_SHARDS", "8")
+		cfg, err := parseFlags([]string{"-shards", "64"})
+		if err != nil {
+			t.Fatalf("parseFlags: %v", err)
+		}
+		if cfg.Shards != 64 {
+			t.Errorf("Shards = %d, want 64 — an explicit flag must win over the environment", cfg.Shards)
+		}
+	})
+
+	t.Run("dashes in a flag name become underscores", func(t *testing.T) {
+		t.Setenv("KYRIA_LOG_LEVEL", "debug")
+		cfg, err := parseFlags(nil)
+		if err != nil {
+			t.Fatalf("parseFlags: %v", err)
+		}
+		if cfg.LogLevel != slog.LevelDebug {
+			t.Errorf("LogLevel = %v, want debug from KYRIA_LOG_LEVEL", cfg.LogLevel)
+		}
+	})
+
+	t.Run("typed values go through the flag's own parser", func(t *testing.T) {
+		t.Setenv("KYRIA_CONN_TIMEOUT", "30s")
+		cfg, err := parseFlags(nil)
+		if err != nil {
+			t.Fatalf("parseFlags: %v", err)
+		}
+		if cfg.ConnTimeout != 30*time.Second {
+			t.Errorf("ConnTimeout = %v, want 30s — the value must be parsed as a Duration", cfg.ConnTimeout)
+		}
+	})
+
+	// The failure mode this guards against: a container silently running the default because
+	// someone typo'd a value, with nothing in the logs to say so.
+	t.Run("an unparseable value is an error, not a silent default", func(t *testing.T) {
+		t.Setenv("KYRIA_SHARDS", "not-a-number")
+		_, err := parseFlags(nil)
+		if err == nil {
+			t.Fatal("parseFlags = nil error, want a rejection of the bad environment value")
+		}
+		if !strings.Contains(err.Error(), "KYRIA_SHARDS") {
+			t.Errorf("error %q does not name the offending variable", err)
+		}
+	})
+
+	// Pins os.LookupEnv over os.Getenv: Getenv cannot tell an unset variable from an empty
+	// one, so an explicitly empty value would silently keep the flag's default instead.
+	t.Run("an empty value is honored, not treated as unset", func(t *testing.T) {
+		t.Setenv("KYRIA_ADDR", "")
+		cfg, err := parseFlags(nil)
+		if err != nil {
+			t.Fatalf("parseFlags: %v", err)
+		}
+		if cfg.Addr != "" {
+			t.Errorf("Addr = %q, want it overridden to empty", cfg.Addr)
+		}
+	})
+
+	t.Run("an unset variable leaves the default", func(t *testing.T) {
+		cfg, err := parseFlags(nil)
+		if err != nil {
+			t.Fatalf("parseFlags: %v", err)
+		}
+		if cfg.Shards != 32 {
+			t.Errorf("Shards = %d, want the default 32", cfg.Shards)
+		}
+	})
+}
+
+// TestParseFlags_AdvertisedAddresses: with clustering on, -addr and -gossip-addr are both
+// published to the rest of the cluster — -addr becomes this node's ring identity, the target
+// of a -MOVED reply, and the address peers dial, while -gossip-addr is echoed back from
+// conn.LocalAddr() as the UDP contact address. A wildcard or port-only value starts up fine
+// and then fails silently, so it has to be rejected at parse time instead.
+func TestParseFlags_AdvertisedAddresses(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr bool
+	}{
+		// Clustered: a host peers can actually resolve.
+		{"hostname, the compose form", []string{"-addr", "kyria-1:6379", "-gossip-addr", "kyria-1:7946"}, false},
+		{"loopback, the local-cluster form", []string{"-addr", "127.0.0.1:7001", "-gossip-addr", "127.0.0.1:8001"}, false},
+
+		// Clustered: nothing a peer could reach.
+		{"addr port-only", []string{"-addr", ":6379", "-gossip-addr", "kyria-1:7946"}, true},
+		{"addr 0.0.0.0", []string{"-addr", "0.0.0.0:6379", "-gossip-addr", "kyria-1:7946"}, true},
+		{"addr ::", []string{"-addr", "[::]:6379", "-gossip-addr", "kyria-1:7946"}, true},
+		{"addr missing port", []string{"-addr", "kyria-1", "-gossip-addr", "kyria-1:7946"}, true},
+		{"gossip-addr port-only", []string{"-addr", "kyria-1:6379", "-gossip-addr", ":7946"}, true},
+		{"gossip-addr 0.0.0.0", []string{"-addr", "kyria-1:6379", "-gossip-addr", "0.0.0.0:7946"}, true},
+
+		// Standalone publishes nothing, so the same values must stay valid — otherwise the
+		// check breaks every single-node invocation, which is the common case.
+		{"standalone keeps the default addr", nil, false},
+		{"standalone accepts 0.0.0.0", []string{"-addr", "0.0.0.0:6379"}, false},
+		{"standalone accepts ::", []string{"-addr", "[::]:6379"}, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseFlags(tc.args)
+			if tc.wantErr && err == nil {
+				t.Errorf("parseFlags(%v) = nil error, want a rejection", tc.args)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("parseFlags(%v) error: %v, want it accepted", tc.args, err)
 			}
 		})
 	}

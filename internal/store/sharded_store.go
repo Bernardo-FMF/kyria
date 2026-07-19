@@ -111,6 +111,16 @@ func (s *ShardedStore) Update(key string, fn func(old []byte) []byte) (bool, err
 	return shard.store.Update(key, fn)
 }
 
+// UpdateReplica atomically applies fn to key's value with the admission filter bypassed,
+// holding the key's shard lock across the whole read-modify-write as Update does.
+func (s *ShardedStore) UpdateReplica(key string, fn func(old []byte) []byte) error {
+	shard := s.shardFor(key)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+
+	return shard.store.UpdateReplica(key, fn)
+}
+
 // Delete removes key and reports whether it had been present.
 func (s *ShardedStore) Delete(key string) bool {
 	shard := s.shardFor(key)

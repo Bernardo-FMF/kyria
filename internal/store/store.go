@@ -49,6 +49,12 @@ type Store interface {
 	// uses to fold a new version into a key's stored sibling set. Admission and
 	// size-limit results are reported as by Set.
 	Update(key string, fn func(old []byte) []byte) (admitted bool, err error)
+	// UpdateReplica is Update for a write this node holds because it is a replica for the
+	// key, rather than because the key was worth caching: the same atomic read-modify-write,
+	// but not subject to the eviction policy's admission filter. The cap still holds — a
+	// victim is evicted — the incoming entry is simply never the one dropped. There is no
+	// admitted bool because the write cannot be refused; size limits apply as with Set.
+	UpdateReplica(key string, fn func(old []byte) []byte) (err error)
 	// Delete removes key, reporting whether it had been present.
 	Delete(key string) (deleted bool)
 	// Size reports the number of entries currently stored.

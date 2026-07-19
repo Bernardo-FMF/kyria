@@ -216,12 +216,12 @@ func (h *Handler) set(args [][]byte) protocol.Value {
 	key := string(args[0])
 	value := args[1]
 
-	// Each branch just sets err from its store call; the shared reply is below.
-	// (ignore admitted for now)
+	// Each branch just sets admitted and err from its store call; the shared reply is below.
 	var err error
+	var admitted bool
 	switch len(args) {
 	case 2:
-		_, err = h.store.Set(key, value)
+		admitted, err = h.store.Set(key, value)
 	case 4:
 		n, convErr := strconv.Atoi(string(args[3]))
 		if convErr != nil {
@@ -238,7 +238,7 @@ func (h *Handler) set(args [][]byte) protocol.Value {
 			return protocol.Error("ERR syntax error")
 		}
 
-		_, err = h.store.SetWithTTL(key, value, ttl)
+		admitted, err = h.store.SetWithTTL(key, value, ttl)
 	default:
 		return protocol.Error("ERR syntax error") // e.g. len 3
 	}
@@ -246,6 +246,12 @@ func (h *Handler) set(args [][]byte) protocol.Value {
 	if err != nil {
 		return protocol.Error("ERR " + err.Error())
 	}
+
+	if !admitted {
+		h.telemetry.RecordEvent(evAdmissionRejects)
+		h.logger.Warn("write not admitted by the store policy", "key", string(args[0]), "op", "set")
+	}
+
 	return protocol.SimpleString("OK")
 }
 
@@ -272,7 +278,7 @@ func (h *Handler) rset(args [][]byte) protocol.Value {
 		return protocol.Error("ERR malformed version")
 	}
 
-	_, err = h.store.Update(string(args[0]), func(old []byte) []byte {
+	err = h.store.UpdateReplica(string(args[0]), func(old []byte) []byte {
 		existing, _ := version.Decode(old)
 		return version.Encode(version.Reconcile(existing, incoming[0]))
 	})

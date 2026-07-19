@@ -122,7 +122,7 @@ func (m *MapStore) Get(key string) ([]byte, bool) {
 // the entry was admitted (an eviction policy may reject a new key when the store
 // is full) and returns a sentinel error on any size-limit violation.
 func (m *MapStore) Set(key string, value []byte) (bool, error) {
-	return m.set(key, value, time.Time{})
+	return m.set(key, value, time.Time{}, false)
 }
 
 // Update reads key's current value, applies fn, and stores the result — the read and
@@ -134,6 +134,14 @@ func (m *MapStore) Update(key string, fn func(old []byte) []byte) (bool, error) 
 	return m.Set(key, fn(old))
 }
 
+// UpdateReplica applies fn to key's value as Update does, but stores the result with the
+// admission filter bypassed, so a full store cannot discard it. See Store.UpdateReplica.
+func (m *MapStore) UpdateReplica(key string, fn func(old []byte) []byte) error {
+	old, _ := m.Get(key) // absent key: old == nil
+	_, err := m.set(key, fn(old), time.Time{}, true)
+	return err
+}
+
 // SetWithTTL stores a private copy of value under key with a time-to-live: Get
 // treats the entry as absent once ttl has elapsed. ttl must be positive,
 // otherwise SetWithTTL returns ErrInvalidTTL. Size limits apply as with Set.
@@ -141,14 +149,14 @@ func (m *MapStore) SetWithTTL(key string, value []byte, ttl time.Duration) (bool
 	if ttl <= 0 {
 		return false, ErrInvalidTTL
 	}
-	return m.set(key, value, time.Now().Add(ttl))
+	return m.set(key, value, time.Now().Add(ttl), false)
 }
 
 // set validates key and value against the configured limits, then stores a
 // private copy of value with the given expiry. It reports whether the entry was
-// admitted, and is the shared implementation behind Set (a zero expiresAt) and
-// SetWithTTL (now + ttl).
-func (m *MapStore) set(key string, value []byte, expiresAt time.Time) (bool, error) {
+// admitted, and is the shared implementation behind Set (a zero expiresAt),
+// SetWithTTL (now + ttl), and UpdateReplica (bypassAdmission).
+func (m *MapStore) set(key string, value []byte, expiresAt time.Time, bypassAdmission bool) (bool, error) {
 	if len(key) == 0 {
 		return false, ErrEmptyKey
 	}
@@ -178,7 +186,7 @@ func (m *MapStore) set(key string, value []byte, expiresAt time.Time) (bool, err
 		return true, nil
 	}
 	// A new key may overflow the cap; evictIfNeeded decides whether it stays.
-	return m.evictIfNeeded(key, e.hint), nil
+	return m.evictIfNeeded(key, e.hint, bypassAdmission), nil
 }
 
 // evictionSampleSize is how many entries sampleVictim inspects. Redis's default
@@ -193,8 +201,8 @@ const evictionSampleSize = 5
 // sampleVictim) and the newcomer are scored and handed to the policy's admit: if
 // the newcomer wins, the incumbent is evicted; otherwise the newcomer itself is
 // evicted (rejected). Plain LRU/LFU always admit; TinyLFU is where admit can
-// refuse.
-func (m *MapStore) evictIfNeeded(newKey string, newHint *atomic.Uint64) bool {
+// refuse. bypassAdmission skips that judgement: the incumbent is always the one evicted.
+func (m *MapStore) evictIfNeeded(newKey string, newHint *atomic.Uint64, bypassAdmission bool) bool {
 	if m.maxEntries == 0 || m.Size() <= m.maxEntries {
 		return true
 	}
@@ -205,7 +213,10 @@ func (m *MapStore) evictIfNeeded(newKey string, newHint *atomic.Uint64) bool {
 
 	scoredNewKey := m.policy.score(newKey, newHint)
 	scoredVictimKey := m.policy.score(k, h)
-	admitted := m.policy.admit(scoredNewKey, scoredVictimKey)
+	admitted := bypassAdmission
+	if !bypassAdmission {
+		admitted = m.policy.admit(scoredNewKey, scoredVictimKey)
+	}
 
 	if admitted {
 		delete(m.data, k)

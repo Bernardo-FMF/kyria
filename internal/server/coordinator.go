@@ -96,7 +96,7 @@ func (c *Coordinator) write(key string, value []byte) protocol.Value {
 	// Mint the new clock inside Update so the read-modify-write is atomic: decode the
 	// current siblings, increment self on their frontier, reconcile the new version in.
 	var newClock vclock.Clock
-	admitted, err := c.store.Update(key, func(old []byte) []byte {
+	err := c.store.UpdateReplica(key, func(old []byte) []byte {
 		existing, _ := version.Decode(old)
 		newClock = version.Frontier(existing).Increment(c.self)
 		return version.Encode(version.Reconcile(existing,
@@ -105,11 +105,6 @@ func (c *Coordinator) write(key string, value []byte) protocol.Value {
 
 	if err != nil {
 		return protocol.Error("ERR " + err.Error())
-	}
-
-	if !admitted {
-		c.telemetry.RecordEvent(evAdmissionRejects)
-		c.logger.Warn("write not admitted by the store policy", "key", key, "op", "set")
 	}
 
 	blob := version.Encode([]version.Version{{Value: value, Clock: newClock}})
@@ -151,7 +146,7 @@ func (c *Coordinator) delete(key string) protocol.Value {
 	var newClock vclock.Clock
 	var opState int64
 	deletedAt := time.Now().Unix()
-	admitted, err := c.store.Update(key, func(old []byte) []byte {
+	err := c.store.UpdateReplica(key, func(old []byte) []byte {
 		existing, _ := version.Decode(old)
 		newClock = version.Frontier(existing).Increment(c.self)
 		if len(version.Live(existing)) > 0 {
@@ -164,11 +159,6 @@ func (c *Coordinator) delete(key string) protocol.Value {
 
 	if err != nil {
 		return protocol.Error("ERR " + err.Error())
-	}
-
-	if !admitted {
-		c.telemetry.RecordEvent(evAdmissionRejects)
-		c.logger.Warn("write not admitted by the store policy", "key", key, "op", "del")
 	}
 
 	blob := version.Encode([]version.Version{version.Tombstone(newClock, deletedAt)})
@@ -300,7 +290,7 @@ func (c *Coordinator) readRepair(key string, merged []version.Version, responder
 		c.telemetry.RecordEvent(evReadRepairs)
 		c.logger.Debug("repairing replica", "key", key, "replica", addr)
 		if addr == c.self {
-			c.store.Update(key, func(old []byte) []byte {
+			c.store.UpdateReplica(key, func(old []byte) []byte {
 				existing, _ := version.Decode(old)
 				for _, v := range merged {
 					existing = version.Reconcile(existing, v)

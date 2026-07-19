@@ -221,7 +221,7 @@ func (a *AntiEntropy) syncWith(addr string) {
 	a.logger.Info("reconciling with peer", "peer", addr, "buckets", len(diffs), "entries", len(entries))
 
 	for key, blob := range entries {
-		a.store.Update(key, func(old []byte) []byte {
+		a.store.UpdateReplica(key, func(old []byte) []byte {
 			existing, _ := version.Decode(old)
 			incoming, _ := version.Decode(blob)
 

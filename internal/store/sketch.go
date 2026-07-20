@@ -14,19 +14,8 @@ const (
 // countMinSketch estimates how often each key has been seen, in fixed memory and
 // without storing the keys. It is the frequency engine behind TinyLFU eviction.
 //
-// It is a grid of small counters — sketchDepth rows × width columns, held in one
-// flat slice. add(key) hashes the key to one column per row and increments those
-// cells (saturating at counterMax); estimate(key) returns the MIN of those cells.
-// Taking the min is the trick: a collision can only push a cell up, so the
-// smallest of a key's cells is the least-corrupted estimate — the sketch may
-// over-count but never under-counts. reset() halves every counter, and add()
-// calls it automatically once size reaches sampleSize, so stale frequency decays.
-//
-// The counters and size are atomics, so add, estimate, and reset are safe to call
-// concurrently — TinyLFU updates the sketch from Get under a read lock. Contention
-// only makes it slightly more approximate (a halve may drop a racing increment; a
-// saturating bump may overshoot counterMax a little), which is fine for a
-// frequency sketch.
+// It is a grid of small counters - sketchDepth rows x width columns, held in one
+// flat slice.
 type countMinSketch struct {
 	counters   []atomic.Uint32 // sketchDepth rows × width columns, row-major
 	width      int             // columns per row; a power of two, so a hash maps to a column with & mask
@@ -37,7 +26,7 @@ type countMinSketch struct {
 }
 
 // NewCountMinSketch returns a sketch sized for roughly capacity distinct keys.
-// width is capacity rounded up to a power of two — about one column per expected
+// width is capacity rounded up to a power of two - about one column per expected
 // key keeps collisions low without wasting memory.
 func NewCountMinSketch(capacity int) *countMinSketch {
 	if capacity < 1 {
@@ -50,7 +39,7 @@ func NewCountMinSketch(capacity int) *countMinSketch {
 		counters:   make([]atomic.Uint32, sketchDepth*width),
 		width:      width,
 		mask:       uint64(width - 1),
-		sampleSize: 10 * capacity, // reset roughly every 10×capacity increments
+		sampleSize: 10 * capacity,
 		seed:       maphash.MakeSeed(),
 	}
 }

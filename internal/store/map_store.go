@@ -18,11 +18,10 @@ type MapStore struct {
 	policy       Policy // eviction strategy; nil = no eviction
 }
 
-// entry is a stored value together with its expiry. A zero expiresAt means the
-// entry never expires.
+// entry is a stored value together with its expiry and its hint (eviction score).
 type entry struct {
 	value     []byte
-	expiresAt time.Time
+	expiresAt time.Time // 0 means the entry never expires
 	// hint is the entry's eviction score, owned by the Policy (nil when the store
 	// has no policy). It's a pointer to an atomic so entry stays a copyable map
 	// value while every copy shares one counter, letting Get update it under a
@@ -31,15 +30,14 @@ type entry struct {
 }
 
 // expired reports whether the entry has expired as of now. now is passed in
-// (rather than read from time.Now inside) to keep the predicate pure and
-// easily testable.
+// (rather than read from time.Now inside) to keep the predicate consistent
+// if called for multiple entries.
 func (e entry) expired(now time.Time) bool {
 	return !e.expiresAt.IsZero() && now.After(e.expiresAt)
 }
 
-// Option configures a MapStore during construction (see New and the With...
-// helpers). This is the functional-options pattern: each option is a closure
-// that sets one field, so New stays source-compatible as options are added.
+// Option configures a MapStore during construction.
+// Each option is a closure that sets one field.
 type Option func(*MapStore)
 
 // WithMaxKeySize overrides the maximum accepted key size, in bytes.
@@ -67,14 +65,15 @@ func WithMaxEntries(n int) Option {
 
 // WithPolicy installs an eviction policy. It takes a factory, not a Policy value,
 // because NewSharded builds one MapStore per shard and each shard needs its own
-// policy instance — a shared one would be mutated under different shard locks.
+// policy instance - because if we had a shared one it would be
+// mutated under different shard locks.
 func WithPolicy(newPolicy func() Policy) Option {
 	return func(m *MapStore) {
 		m.policy = newPolicy()
 	}
 }
 
-// New returns a MapStore initialized with the default size limits, overridden
+// New returns a MapStore initialized with the default values, overridden
 // by any supplied options.
 func New(opts ...Option) *MapStore {
 	m := &MapStore{
@@ -96,17 +95,16 @@ var _ Store = (*MapStore)(nil)
 // Get returns the value stored for key. The returned slice aliases internal
 // storage and must not be modified by the caller.
 //
-// Under ShardedStore, Get holds only a read lock, so it must not write the map.
-// That governs two things here: expiry is lazy (an expired entry is reported
-// absent but not deleted — reclamation is left to a later Set or the janitor),
-// and the eviction policy records the access via an atomic hint rather than
-// touching the map. Concurrent readers may update atomics; they must not mutate
-// the map.
+// Expiry is lazy (an expired entry is reported absent but not deleted -
+// reclamation is left to a later Set or the janitor)-
+// The eviction policy records the access via an atomic hint rather than
+// touching the map, because concurrent readers may update atomics;
 func (m *MapStore) Get(key string) ([]byte, bool) {
 	e, ok := m.data[key]
 	if !ok {
 		return nil, false
 	}
+	// Lazy expiry, leave the removal to the janitor goroutine.
 	if e.expired(time.Now()) {
 		return nil, false
 	}
@@ -125,26 +123,16 @@ func (m *MapStore) Set(key string, value []byte) (bool, error) {
 	return m.set(key, value, time.Time{}, false)
 }
 
-// Update reads key's current value, applies fn, and stores the result — the read and
-// write as one call. MapStore itself is not synchronized, so on its own this is only
-// atomic within a single goroutine; ShardedStore holds the key's lock across the
-// whole call to make it atomic under concurrency.
-func (m *MapStore) Update(key string, fn func(old []byte) []byte) (bool, error) {
-	old, _ := m.Get(key) // absent key: old == nil
-	return m.Set(key, fn(old))
-}
-
-// UpdateReplica applies fn to key's value as Update does, but stores the result with the
-// admission filter bypassed, so a full store cannot discard it. See Store.UpdateReplica.
+// UpdateReplica applies fn to key's value as an atomic read-modify-write operation.
+// It bypasses the admission filter, so a full store cannot discard it.
 func (m *MapStore) UpdateReplica(key string, fn func(old []byte) []byte) error {
-	old, _ := m.Get(key) // absent key: old == nil
+	old, _ := m.Get(key)
 	_, err := m.set(key, fn(old), time.Time{}, true)
 	return err
 }
 
-// SetWithTTL stores a private copy of value under key with a time-to-live: Get
-// treats the entry as absent once ttl has elapsed. ttl must be positive,
-// otherwise SetWithTTL returns ErrInvalidTTL. Size limits apply as with Set.
+// SetWithTTL stores a private copy of value under key with a time-to-live, guaranteeing
+// that ttl is a positive value, returning ErrInvalidTTL otherwise.
 func (m *MapStore) SetWithTTL(key string, value []byte, ttl time.Duration) (bool, error) {
 	if ttl <= 0 {
 		return false, ErrInvalidTTL
@@ -189,13 +177,13 @@ func (m *MapStore) set(key string, value []byte, expiresAt time.Time, bypassAdmi
 	return m.evictIfNeeded(key, e.hint, bypassAdmission), nil
 }
 
-// evictionSampleSize is how many entries sampleVictim inspects. Redis's default
-// is 5; higher is more accurate but slower.
+// evictionSampleSize is how many entries sampleVictim inspects.
+// Higher values are more accurate but slower.
 const evictionSampleSize = 5
 
 // evictIfNeeded enforces the per-shard cap after a new key has been inserted and
-// reports whether that newcomer was admitted (kept). It runs from set under the
-// write lock, so deleting from the map here is safe.
+// reports whether that newcomer was admitted into the store.
+// It runs from set under the write lock, so deleting from the map here is safe.
 //
 // Within the cap there is nothing to do. Over it, the weakest incumbent (from
 // sampleVictim) and the newcomer are scored and handed to the policy's admit: if
@@ -227,12 +215,12 @@ func (m *MapStore) evictIfNeeded(newKey string, newHint *atomic.Uint64, bypassAd
 	return admitted
 }
 
-// sampleVictim returns the weakest incumbent — the entry with the lowest
-// policy.score — to consider evicting, skipping excludeKey (the newcomer, which
-// admit judges separately). It inspects at most evictionSampleSize entries; Go
-// randomizes map iteration, so those form a random sample, keeping eviction
-// O(1)-ish at the cost of an approximate victim. ok is false only if the sample
-// was empty.
+// sampleVictim returns the weakest incumbent (the entry with the lowest policy.score)
+// to consider evicting, skipping excludeKey (the newcomer, which admit judges separately).
+// It inspects at most evictionSampleSize entries in a randomized map iteration,
+// so the selected entry might not be the one with the lowest score in the entire store,
+// but it's an approximation.
+// Ok is false only if the sample was empty.
 func (m *MapStore) sampleVictim(excludeKey string) (key string, hint *atomic.Uint64, ok bool) {
 	var chosenKey string
 	var chosenHint *atomic.Uint64
@@ -270,13 +258,12 @@ func (m *MapStore) Delete(key string) bool {
 //
 // With lazy expiry this counts entries physically present, including any that
 // have expired but not yet been reclaimed (Get hides them but does not remove
-// them). Reclaiming those entries is the job of the active janitor.
+// them). Reclaiming those entries is the job of the janitor goroutine.
 func (m *MapStore) Size() int {
 	return len(m.data)
 }
 
-// Range calls fn for every live entry, skipping any that have expired (lazy expiry as in
-// Get: an expired entry is passed over, not deleted — reclamation is the janitor's job).
+// Range calls fn for every live entry, skipping any that have expired.
 // It takes no lock; MapStore is the single-threaded core, and ShardedStore.Range supplies
 // the per-shard lock. The value passed to fn aliases internal storage, so fn must only read it.
 func (m *MapStore) Range(fn func(key string, value []byte)) {

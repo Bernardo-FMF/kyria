@@ -24,7 +24,7 @@ type replicator interface {
 
 // Coordinator drives Dynamo-style N/R/W quorum replication with vector-clock
 // versioning. The primary (the node the client reached via -MOVED) applies the op to
-// its local store — minting/advancing the clock inside store.Update — then fans the
+// its local store — minting/advancing the clock inside store.UpdateReplica — then fans the
 // versioned write out to the replica set and waits for a quorum: W acks for a write,
 // R responses for a read.
 type Coordinator struct {
@@ -93,7 +93,7 @@ func (c *Coordinator) coordinate(cmd protocol.Command) protocol.Value {
 // write mints a new version for value, stores it locally, then fans the SAME version
 // out to the replica set, returning +OK once W acks land (else a RESP error).
 func (c *Coordinator) write(key string, value []byte) protocol.Value {
-	// Mint the new clock inside Update so the read-modify-write is atomic: decode the
+	// Mint the new clock inside UpdateReplica so the read-modify-write is atomic: decode the
 	// current siblings, increment self on their frontier, reconcile the new version in.
 	var newClock vclock.Clock
 	err := c.store.UpdateReplica(key, func(old []byte) []byte {
@@ -316,7 +316,7 @@ func (c *Coordinator) readRepair(key string, merged []version.Version, responder
 // Counting the local replica requires that the caller has ALREADY applied the write
 // locally: write and delete do so through store.UpdateReplica, which cannot soft-fail
 // (it returns only an error, which they return on) so reaching here means the local copy
-// exists. A caller that used Update instead could be told !admitted and still arrive here,
+// exists. An admission-refusable write could be told !admitted and still arrive here,
 // making this count an ack it never earned.
 //
 // op runs for every peer regardless of need — the fan-out is the replication itself, and

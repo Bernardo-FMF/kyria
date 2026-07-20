@@ -6,9 +6,7 @@ import (
 	"time"
 )
 
-// shard is one partition of a ShardedStore: a MapStore guarded by its own
-// RWMutex. The mutex sits next to the store it protects so the locking
-// discipline is obvious — nothing touches store without holding mu.
+// shard is one partition of a ShardedStore: a MapStore guarded by its own RWMutex.
 type shard struct {
 	mu    sync.RWMutex
 	store *MapStore
@@ -17,8 +15,7 @@ type shard struct {
 // ShardedStore is a concurrency-safe Store that partitions the keyspace across
 // a fixed set of independently locked shards (lock striping). Operations on
 // keys in different shards proceed in parallel, so contention falls as the
-// shard count grows; a ShardedStore with a single shard is equivalent to one
-// global lock.
+// shard count grows.
 //
 // Each shard wraps a MapStore, inheriting its validation, size limits, and
 // defensive value copies. The shard set is created at construction and never
@@ -56,11 +53,9 @@ var _ Store = (*ShardedStore)(nil)
 // construction: the same key always resolves to the same shard, hence the same
 // lock.
 //
-// Selection is plain modulo hashing (hash(key) % shardCount) for now. That is
-// safe here only because shardCount never changes — if it did, nearly every key
-// would remap. Distributing keys across a changing set of cluster nodes is a
-// separate, later concern that needs consistent hashing; this in-process shard
-// selection deliberately does not.
+// Selection is plain modulo hashing (hash(key) % shardCount), which is
+// safe here only because shardCount never changes - if it did, nearly every key
+// would remap.
 func (s *ShardedStore) shardFor(key string) *shard {
 	idx := maphash.String(s.seed, key) % uint64(len(s.shards))
 	return s.shards[idx]
@@ -73,9 +68,6 @@ func (s *ShardedStore) Get(key string) ([]byte, bool) {
 	shard.mu.RLock()
 	defer shard.mu.RUnlock()
 
-	// Returning the slice after the lock is released is safe: Set never mutates
-	// a stored value in place (it inserts a fresh copy), so these bytes are
-	// never written again.
 	return shard.store.Get(key)
 }
 
@@ -100,19 +92,9 @@ func (s *ShardedStore) SetWithTTL(key string, value []byte, ttl time.Duration) (
 	return shard.store.SetWithTTL(key, value, ttl)
 }
 
-// Update atomically applies fn to key's value. It holds the key's shard lock across
-// the whole read-modify-write, so concurrent Updates to the same key serialize
-// instead of racing and losing writes. Admission and size errors propagate as by Set.
-func (s *ShardedStore) Update(key string, fn func(old []byte) []byte) (bool, error) {
-	shard := s.shardFor(key)
-	shard.mu.Lock()
-	defer shard.mu.Unlock()
-
-	return shard.store.Update(key, fn)
-}
-
 // UpdateReplica atomically applies fn to key's value with the admission filter bypassed,
-// holding the key's shard lock across the whole read-modify-write as Update does.
+// holding the key's shard lock across the whole read-modify-write so concurrent updates to
+// the same key serialize instead of racing.
 func (s *ShardedStore) UpdateReplica(key string, fn func(old []byte) []byte) error {
 	shard := s.shardFor(key)
 	shard.mu.Lock()
@@ -164,7 +146,7 @@ func (s *ShardedStore) Range(fn func(key string, value []byte)) {
 
 // DeleteIf removes key only if pred holds for its current value, holding the key's shard write
 // lock across the whole check-and-delete so no concurrent write lands in between. A missing key
-// is a no-op reporting false. See Store.DeleteIf for the predicate contract.
+// is a no-op reporting false.
 func (s *ShardedStore) DeleteIf(key string, pred func(old []byte) bool) bool {
 	shard := s.shardFor(key)
 

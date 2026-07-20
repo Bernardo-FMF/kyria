@@ -33,8 +33,9 @@ type Store interface {
 	// Get returns the value stored for key and whether it was present.
 	Get(key string) (value []byte, found bool)
 	// Set stores value under key with no expiry. It reports whether the entry
-	// was admitted — an eviction policy may reject a new key when the store is
-	// full — and returns a sentinel error if key or value violates the
+	// was admitted - an eviction policy may reject a new key when the store is
+	// full.
+	// It also returns a sentinel error if key or value violates the
 	// configured size limits.
 	Set(key string, value []byte) (admitted bool, err error)
 	// SetWithTTL stores value under key with a time-to-live: Get treats the
@@ -42,34 +43,31 @@ type Store interface {
 	// SetWithTTL returns ErrInvalidTTL. Like Set, it reports whether the entry
 	// was admitted. Size limits apply as with Set.
 	SetWithTTL(key string, value []byte, ttl time.Duration) (admitted bool, err error)
-	// Update atomically replaces key's value with fn(old): it reads the current
-	// value (nil if absent), calls fn to compute the new value, and stores that —
-	// as one indivisible read-modify-write, so concurrent Updates to the same key
-	// cannot interleave and lose a write. It is the primitive the replication layer
-	// uses to fold a new version into a key's stored sibling set. Admission and
-	// size-limit results are reported as by Set.
-	Update(key string, fn func(old []byte) []byte) (admitted bool, err error)
-	// UpdateReplica is Update for a write this node holds because it is a replica for the
-	// key, rather than because the key was worth caching: the same atomic read-modify-write,
-	// but not subject to the eviction policy's admission filter. The cap still holds — a
-	// victim is evicted — the incoming entry is simply never the one dropped. There is no
-	// admitted bool because the write cannot be refused; size limits apply as with Set.
+	// UpdateReplica atomically replaces key's value with fn(old): it reads the current
+	// value (nil if absent), calls fn to compute the new value, and stores that — as one
+	// indivisible read-modify-write, so concurrent updates to the same key cannot interleave
+	// and lose a write. It is the primitive the replication layer uses to fold a new version
+	// into a key's stored sibling set, for a write this node holds because it is a replica for
+	// the key rather than because the key was worth caching. Unlike Set it is NOT subject to
+	// the eviction policy's admission filter: the cap still holds — a victim is evicted — the
+	// incoming entry is simply never the one dropped. There is no admitted bool because the
+	// write cannot be refused; size limits apply as with Set.
 	UpdateReplica(key string, fn func(old []byte) []byte) (err error)
 	// Delete removes key, reporting whether it had been present.
 	Delete(key string) (deleted bool)
 	// Size reports the number of entries currently stored.
 	Size() int
 	// Range calls fn for every live entry currently stored, skipping expired-but-unreaped
-	// ones (the same view as Get). The value passed to fn aliases internal storage — fn
-	// must only read it, never mutate it — and, under ShardedStore, runs while a shard lock
-	// is held, so fn must not call back into the store.
+	// ones (the same view as Get). The value passed to fn aliases internal storage - fn
+	// must only read it, never mutate it.
+	// For the sharded implementation, runs while a shard lock is held,
+	// so fn must not call back into the store.
 	Range(fn func(key string, value []byte))
 	// DeleteIf removes key only when pred reports true for its current value, with the
 	// read of that value and the removal performed as one indivisible step under the key's
-	// lock — so no concurrent write can slip between the check and the delete. A missing key
+	// lock - so no concurrent write can slip between the check and the delete. A missing key
 	// (absent, or expired-but-unreaped) is a no-op: pred is not consulted and DeleteIf reports
 	// false. pred runs under the key's lock, so it must only read the bytes it is handed and
-	// must not call back into the store. It is the primitive the tombstone GC uses to reap a
-	// key only while doing so is still safe.
+	// must not call back into the store.
 	DeleteIf(key string, pred func(old []byte) bool) (deleted bool)
 }

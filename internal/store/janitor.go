@@ -5,17 +5,14 @@ import (
 	"time"
 )
 
-// ── The synchronous sweep ────────────────────────────────────────────────────
-
-// reaper is the behaviour a Janitor drives: remove entries that have expired as
-// of now, returning how many were removed. It is unexported, but a *ShardedStore
-// passed to NewJanitor from another package still satisfies it.
+// reaper is the mechanism that removes expired entries as of now,
+// returning how many were removed.
 type reaper interface {
 	reapExpired(now time.Time) int
 }
 
 // reapExpired deletes every entry that has expired as of now and returns the
-// number removed. It does no locking of its own — MapStore is not safe for
+// number removed. It does no locking of its own - MapStore is not safe for
 // concurrent use, so a caller (a shard) must hold the lock.
 func (m *MapStore) reapExpired(now time.Time) int {
 	removed := 0
@@ -53,8 +50,6 @@ var (
 	_ reaper = (*ShardedStore)(nil)
 )
 
-// ── The asynchronous machinery ───────────────────────────────────────────────
-
 // Janitor periodically drives a reaper to reclaim expired entries.
 //
 // Lazy expiry (in Get) hides expired entries but never frees their memory, so a
@@ -72,7 +67,7 @@ type Janitor struct {
 	stopOnce sync.Once     // guards close(stop) so Stop is idempotent
 }
 
-// NewJanitor starts a background goroutine that reaps expired entries from r
+// NewJanitor starts a background goroutine that reaps expired entries
 // every interval, and returns a handle to it. The caller must call Stop to
 // release the goroutine.
 func NewJanitor(r reaper, interval time.Duration) *Janitor {

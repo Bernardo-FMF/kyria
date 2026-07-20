@@ -3,17 +3,13 @@ package store
 import "sync/atomic"
 
 // Policy is a pluggable eviction strategy. Each entry carries an atomic hint the
-// policy maintains; score turns that (and/or the key) into an eviction priority,
-// and the store evicts the lowest score among a small random sample
-// (MapStore.sampleVictim). admit then decides whether a newcomer is worth
-// displacing that victim, or should be rejected instead.
-//
-// recordAccess is called from Get under a read lock, possibly concurrently for
-// the same entry, so it must touch only atomic state — nothing else. That one
-// constraint is what keeps reads lock-free.
+// policy maintains; score turns that (and/or the key) into an eviction priority.
 type Policy interface {
-	// recordAccess notes a read of key; recordInsert notes a write.
+	// recordAccess is called from Get under a read lock, possibly concurrently for
+	// the same entry, so it must touch only atomic state — nothing else. That one
+	// constraint is what keeps reads lock-free.
 	recordAccess(key string, hint *atomic.Uint64)
+	// recordInsert notes a write.
 	recordInsert(key string, hint *atomic.Uint64)
 	// score returns an entry's eviction priority; the store evicts the lowest.
 	score(key string, hint *atomic.Uint64) uint64
@@ -25,14 +21,12 @@ type Policy interface {
 
 // lru is an approximate LRU policy. It stamps each accessed or inserted entry
 // with the next value of a monotonic clock, so the smallest hint marks the
-// least-recently-touched entry — the one the store evicts.
+// least-recently-touched entry - the one the store evicts.
 type lru struct {
 	clock atomic.Uint64
 }
 
-// NewLRU returns a fresh approximate-LRU policy. It is the factory passed to
-// WithPolicy: NewSharded calls it once per shard, so each shard's clock is its
-// own and is never shared or contended across shards.
+// NewLRU returns a fresh approximate-LRU policy.
 func NewLRU() Policy {
 	return &lru{}
 }
@@ -45,7 +39,7 @@ func (p *lru) score(key string, hint *atomic.Uint64) uint64 { return hint.Load()
 // displaces the least-recently-used victim.
 func (p *lru) admit(candidateScore, victimScore uint64) bool { return true }
 
-// lfuBaseCount is the count a new entry starts at (Redis's LFU_INIT_VAL), so a
+// lfuBaseCount is the count a new entry starts at, so a
 // fresh key is not pinned at zero.
 const lfuBaseCount = 5
 
@@ -53,14 +47,14 @@ const lfuBaseCount = 5
 // count that grows on every access, so the smallest hint is the least-frequently-
 // used entry — the one the store evicts. Unlike lru it keeps no per-policy state.
 //
-// Two known limitations, both addressed by TinyLFU: a new entry starts at the
-// base count (the floor), so it is the immediate eviction candidate — new keys
-// struggle to get in (cold start); and counts only ever grow, so a key that was
-// hot long ago never ages out.
+// Two known limitations, both addressed by TinyLFU:
+// 1. a new entry starts at the base count (the floor), so it is the immediate
+// eviction candidate - new keys struggle to get in (cold start);
+// 2. and counts only ever grow, so a key that was hot long ago never ages out.
 type lfu struct {
 }
 
-// NewLFU returns a fresh LFU policy. It is the factory passed to WithPolicy.
+// NewLFU returns a fresh LFU policy.
 func NewLFU() Policy {
 	return &lfu{}
 }
@@ -83,10 +77,7 @@ type tinyLFU struct {
 }
 
 // NewTinyLFU returns a factory for TinyLFU policies whose sketch is sized for
-// capacity keys. Unlike NewLRU/NewLFU (which are themselves a func() Policy),
-// TinyLFU needs that capacity — so NewTinyLFU takes it and returns the
-// func() Policy. WithPolicy calls that once per shard, giving each shard its own
-// sketch. Usage: WithPolicy(NewTinyLFU(n)).
+// capacity keys.
 func NewTinyLFU(capacity int) func() Policy {
 	return func() Policy {
 		return &tinyLFU{
@@ -102,9 +93,8 @@ func (p *tinyLFU) score(key string, hint *atomic.Uint64) uint64 {
 }
 
 // admit is the admission filter: it accepts the newcomer only if the sketch
-// estimates it strictly more frequent than the victim it would displace. Ties
-// favor the incumbent, so a newcomer must genuinely beat the weakest resident to
-// get in — which is what lets TinyLFU shrug off scans and one-hit-wonders.
+// estimates it strictly more frequent than the victim it would displace.
+// Ties favor the incumbent.
 func (p *tinyLFU) admit(candidateScore, victimScore uint64) bool {
 	return candidateScore > victimScore
 }

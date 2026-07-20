@@ -22,11 +22,8 @@ import (
 //
 // A client sends a command as an array of bulk strings — SET foo bar becomes
 // "*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n".
-//
-// Spec/tests: resp_test.go.  Run: go test ./internal/protocol/
-// Full grammar: https://redis.io/docs/latest/develop/reference/protocol-spec/
 
-// RESP type bytes — the leading byte that tags every value on the wire — and the
+// RESP type bytes - the leading byte that tags every value on the wire - and the
 // "\r\n" that terminates every line.
 const (
 	typeSimpleString = '+'
@@ -37,7 +34,7 @@ const (
 	crlf             = "\r\n"
 )
 
-// Value is a single RESP value — a tagged union over the five RESP types. typeTag
+// Value is a single RESP value - a tagged union over the five RESP types. typeTag
 // says which one it is; only the field(s) that match are meaningful. For bulk and
 // array, a nil slice is the RESP null ("$-1" / "*-1"), distinct from an empty but
 // present value ("$0" / "*0").
@@ -87,9 +84,7 @@ func Array(elems ...Value) Value {
 }
 
 // AsError reports whether v is a RESP error reply and returns its message. A peer
-// client uses it to turn a replica's -ERR reply into a Go error. These As* methods
-// are the read side of the constructors above: the server builds replies, a client
-// dialing a peer inspects them.
+// client uses it to turn a replica's -ERR reply into an error.
 func (v Value) AsError() (msg string, ok bool) {
 	if v.typeTag == typeError {
 		return v.str, true
@@ -98,8 +93,6 @@ func (v Value) AsError() (msg string, ok bool) {
 }
 
 // AsBulk returns the bytes of a bulk-string reply and whether a value is present.
-// A null bulk (a GET miss, "$-1") reports (nil, false), and so does any non-bulk
-// value — a caller that has already ruled out an error reads this as "key absent".
 func (v Value) AsBulk() (b []byte, ok bool) {
 	if v.typeTag == typeBulkString && v.bulk != nil {
 		return v.bulk, true
@@ -108,8 +101,8 @@ func (v Value) AsBulk() (b []byte, ok bool) {
 }
 
 // Decode reads exactly one RESP value from r and returns it; arrays recurse.
-// Malformed input — an unknown tag, a non-numeric length, or a stream that ends
-// mid-value — returns an error.
+// Malformed input - an unknown tag, a non-numeric length, or a stream that ends
+// mid-value. In these situations, it returns an error.
 func Decode(r *bufio.Reader) (Value, error) {
 	typeTag, err := r.ReadByte()
 	if err != nil {
@@ -181,7 +174,7 @@ func Decode(r *bufio.Reader) (Value, error) {
 
 // readLine reads through the next CRLF and returns the line without the trailing
 // "\r\n". The bytes point into r's internal buffer and are only valid until the
-// next read, so Decode parses or copies them immediately — that's what avoids
+// next read, so Decode parses or copies them immediately - that's what avoids
 // allocating a string for every header line.
 func readLine(r *bufio.Reader) ([]byte, error) {
 	line, err := r.ReadSlice('\n')
@@ -195,7 +188,7 @@ func readLine(r *bufio.Reader) ([]byte, error) {
 }
 
 // parseInt reads a base-10 signed integer from b without allocating — strconv
-// only parses strings, which would force a []byte→string copy on every length
+// only parses strings, which would force a []byte -> string copy on every length
 // prefix. Used for ':' integers and for bulk/array length prefixes.
 func parseInt(b []byte) (int64, error) {
 	if len(b) == 0 {
@@ -224,14 +217,13 @@ func parseInt(b []byte) (int64, error) {
 // Limits on declared sizes. A network server can't trust these length/count
 // prefixes, so we reject absurd ones before allocating for them.
 const (
-	maxBulkSize   = 512 << 20 // 512 MiB, matching Redis's default proto-max-bulk-len
+	maxBulkSize   = 512 << 20 // 512 MiB
 	maxArrayCount = 1 << 20   // 1,048,576 elements
 )
 
 // ProtocolError reports input that does not conform to RESP. It is a distinct
 // type from the transport errors (io.EOF, a dropped connection) that Decode also
-// returns, so the server can tell them apart with errors.As — replying to the
-// client on a ProtocolError, but just closing the connection on a transport error.
+// returns, so the server can tell them apart with errors.As.
 type ProtocolError struct {
 	msg string
 }
@@ -266,7 +258,7 @@ func (v Value) encode(ew *MemoizedWriter) {
 		ew.writeInt(v.integer)
 		ew.writeString(crlf)
 	case typeBulkString:
-		if v.bulk == nil { // null bulk
+		if v.bulk == nil {
 			ew.writeString("$-1" + crlf)
 			return
 		}

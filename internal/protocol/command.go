@@ -8,7 +8,7 @@ type Command struct {
 }
 
 // Command reads a request out of a decoded Value. A request is a RESP array of
-// bulk strings — SET foo bar arrives as ["SET", "foo", "bar"] — so Command
+// bulk strings - SET foo bar arrives as ["SET", "foo", "bar"] — so Command
 // returns its command word and arguments, leaving the case as-is for the
 // dispatcher to normalize. If the Value isn't a non-empty array of bulk strings,
 // it returns a *ProtocolError.

@@ -1,5 +1,5 @@
-// Command kyria runs the cache server: it builds a concurrency-safe store, wraps
-// it in the RESP/TCP server, and serves until interrupted, shutting down cleanly.
+// Main build the RESP/TCP server, along with all its dependencies
+// and starts the configured routines.
 package main
 
 import (
@@ -75,9 +75,9 @@ func main() {
 		addr := conn.LocalAddr().String()
 		// The node ID is the CLIENT (TCP) address, not the gossip addr: the ring
 		// keys on IDs, and an ID is what goes into a -MOVED reply, so a redirected
-		// client can reconnect to the owner. Addr stays the gossip UDP addr peers
-		// reach us on. NB: cfg.Addr must be routable and unique per node (e.g.
-		// 127.0.0.1:7001) — ":6379" alone won't route a client anywhere.
+		// client can reconnect to the owner.
+		// Addr stays the gossip UDP addr peers reach us on.
+		// This means cfg.Addr must be routable and unique per node (e.g. 127.0.0.1:7001).
 		self := cluster.Node{ID: cfg.Addr, Addr: addr, State: cluster.Alive, Incarnation: 1}
 		members = cluster.NewMembers(self, logger)
 		gossiper = cluster.NewGossiper(members, conn, cfg.gossiperOptions()...)
@@ -90,7 +90,7 @@ func main() {
 		// "self" is this node's ID (its client address), matching what the ring returns.
 		peer = server.NewPeer(cfg.ReplicaTimeout)
 		// One hint store is shared by the coordinator (parks a hint when a fan-out write can't
-		// reach a replica) and the replayer (delivers parked hints once the replica recovers).
+		// reach a replica).
 		hints := server.NewHintStore()
 		tel.RegisterGauge("hints_pending", func() int64 { return int64(hints.Size()) })
 		coordinator = server.NewCoordinator(self.ID, router, st, peer, hints, server.CoordinatorOptions{
@@ -100,9 +100,10 @@ func main() {
 			Telemetry: tel,
 			Logger:    logger,
 		})
+		// The replayer delivers parked hints once the replica recovers.
 		replayer = server.NewHintReplayer(hints, peer, cfg.HintReplayerInterval, logger)
 
-		// Anti-entropy is opt-in — a zero interval disables it. When on, the background loop
+		// Anti-entropy is opt-in - a zero interval disables it. When on, the background loop
 		// periodically Merkle-diffs a peer and reconciles the keys that differ.
 		if cfg.AntiEntropyInterval > 0 {
 			antiEntropy = server.NewAntiEntropy(self.ID, st, peer, members, antiEntropyLeaves, cfg.AntiEntropyInterval, logger)
@@ -146,9 +147,8 @@ func main() {
 		if router != nil {
 			router.Stop() // end the background ring-rebuild loop
 		}
-		// Stop the replayer and anti-entropy loops before peer.Close(): both issue calls over
-		// `peer`, so drain their goroutines before its pooled connections are released. tombstoneGC
-		// is store-only, so its stop order vs peer.Close doesn't matter — it's grouped here for tidiness.
+		// Stop the loops that depend on peer before peer.Close(): we must first drain their goroutines
+		// before its pooled connections are released.
 		if replayer != nil {
 			replayer.Stop()
 		}

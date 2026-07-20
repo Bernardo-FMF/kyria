@@ -14,7 +14,7 @@ import (
 )
 
 // ErrMalformed is returned by the decode helpers when the input is shorter than a
-// declared length — truncated or corrupt data. Callers decoding untrusted input rely
+// declared length - truncated or corrupt data. Callers decoding untrusted input rely
 // on this being an error, never a panic.
 var ErrMalformed = errors.New("binenc: truncated or malformed data")
 
@@ -112,7 +112,7 @@ func Bytes(data []byte, off, n int) ([]byte, int, error) {
 }
 
 // Bool reads a single 0/1 byte at off, returning it as a bool and the advanced
-// offset — or ErrMalformed if no bytes remain or the byte isn't 0 or 1.
+// offset - or ErrMalformed if no bytes remain or the byte isn't 0 or 1.
 func Bool(data []byte, off int) (bool, int, error) {
 	if len(data)-off < 1 {
 		return false, off, ErrMalformed

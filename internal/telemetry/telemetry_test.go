@@ -248,6 +248,46 @@ func TestHistogram_Quantile(t *testing.T) {
 	}
 }
 
+// TestDefaultBuckets_ResolveSubMicrosecondLatency guards the bug that made p50 and p99 useless: the
+// smallest bound sat at 100µs while real ops run at 0.3–2µs, so every observation fell in bucket 0 and
+// every percentile pinned to 100µs. This asserts the DEFAULT ladder (not a hand-built one) can tell a
+// fast request from a slow one — the fine buckets must live where the traffic actually is.
+func TestDefaultBuckets_ResolveSubMicrosecondLatency(t *testing.T) {
+	// The finest bound must reach into the sub-microsecond range the hot path occupies. If the
+	// smallest bucket is coarser than a local op, the histogram cannot resolve one.
+	if defaultBuckets[0] > time.Microsecond {
+		t.Fatalf("smallest bucket = %v, want <= 1µs so sub-µs ops are distinguishable", defaultBuckets[0])
+	}
+
+	h := newHistogram(defaultBuckets)
+	// A realistic spread: mostly fast local hits, a few slow clustered ops.
+	for range 90 {
+		h.Observe(400 * time.Nanosecond)
+	}
+	for range 10 {
+		h.Observe(2 * time.Millisecond)
+	}
+
+	p50, p99 := h.Quantile(0.5), h.Quantile(0.99)
+	if p50 >= p99 {
+		t.Errorf("p50=%v p99=%v — a fast bulk with a slow tail must separate the two", p50, p99)
+	}
+	if p50 > 10*time.Microsecond {
+		t.Errorf("p50=%v, want sub-10µs — the median is a fast local hit", p50)
+	}
+}
+
+// TestDefaultBuckets_AreAscending: newHistogram and Quantile both assume ascending bounds — a stray
+// out-of-order edit would silently corrupt every percentile, so pin the invariant.
+func TestDefaultBuckets_AreAscending(t *testing.T) {
+	for i := 1; i < len(defaultBuckets); i++ {
+		if defaultBuckets[i] <= defaultBuckets[i-1] {
+			t.Errorf("bucket %d (%v) is not greater than bucket %d (%v)",
+				i, defaultBuckets[i], i-1, defaultBuckets[i-1])
+		}
+	}
+}
+
 // TestHistogram_EmptyAndNil: an unobserved histogram reports 0 rather than a misleading bound, and a
 // nil histogram no-ops on both methods.
 func TestHistogram_EmptyAndNil(t *testing.T) {

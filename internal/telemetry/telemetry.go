@@ -41,15 +41,20 @@ type gauge struct {
 	fn   func() int64
 }
 
-// defaultBuckets are the latency bucket bounds for a command histogram, tuned for an in-memory cache:
-// sub-millisecond resolution at the bottom, then roughly a 1–2.5–5 progression per decade up to a
-// second. Bucket choice sets the resolution — too coarse and a percentile says nothing useful, too
-// narrow a range and every slow request piles into the overflow bucket.
+// defaultBuckets are the latency bucket bounds for a command histogram, tuned to where an in-memory
+// cache actually operates: a 1–2.5–5 progression per decade starting at 250ns, so the fine buckets
+// sit on the sub-microsecond local hot path (the Phase-0 benchmarks measure ops at 0.3–2µs) and
+// coarsen up to 500ms — high enough that a pathological clustered request lands in a real bucket
+// rather than the overflow. Bounds must stay ascending: newHistogram assumes it and Quantile walks
+// them in order. (A prior ladder started at 100µs, above the entire signal, which pinned every
+// percentile to 100µs — the resolution has to bracket the data, not sit above it.)
 var defaultBuckets = []time.Duration{
-	100 * time.Microsecond, 250 * time.Microsecond, 500 * time.Microsecond,
-	time.Millisecond, 2500 * time.Microsecond, 5 * time.Millisecond, 10 * time.Millisecond,
-	25 * time.Millisecond, 50 * time.Millisecond, 100 * time.Millisecond,
-	250 * time.Millisecond, 500 * time.Millisecond, time.Second,
+	250 * time.Nanosecond, 500 * time.Nanosecond,
+	time.Microsecond, 2500 * time.Nanosecond, 5 * time.Microsecond,
+	10 * time.Microsecond, 25 * time.Microsecond, 50 * time.Microsecond, 100 * time.Microsecond,
+	250 * time.Microsecond, 500 * time.Microsecond,
+	time.Millisecond, 5 * time.Millisecond, 25 * time.Millisecond,
+	100 * time.Millisecond, 500 * time.Millisecond,
 }
 
 // newHistogram returns a histogram over the given ascending bounds. The bounds are cloned rather than

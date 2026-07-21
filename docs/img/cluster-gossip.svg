@@ -1,0 +1,51 @@
+<svg width="720" height="292" viewBox="0 0 720 292" role="img" xmlns="http://www.w3.org/2000/svg">
+  <title>Cluster formation by gossip</title>
+  <desc>Across three rounds a new node joins via a seed and gossip spreads its knowledge epidemically: it starts knowing only itself and the seed, learns the whole roster, and the cluster converges so every roster matches.</desc>
+  <style>
+    :root{--ink:#24292f;--muted:#57606a;--line:#d0d7de;--surface:#f6f8fa;--accent:#0969da;--ok:#1a7f37;--oksoft:#dafbe1;}
+    @media (prefers-color-scheme:dark){:root{--ink:#e6edf3;--muted:#8b949e;--line:#30363d;--surface:#161b22;--accent:#58a6ff;--ok:#3fb950;--oksoft:#12261a;}}
+    text{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;fill:var(--ink);}
+    .m{fill:var(--muted);}
+    .nok{fill:var(--ok);stroke:var(--ok);}
+    .nnew{fill:var(--accent);stroke:var(--accent);}
+    .ring{fill:none;stroke:var(--muted);stroke-width:1.5;}
+    .eok{stroke:var(--ok);stroke-width:1.6;fill:none;}
+    .egos{stroke:var(--accent);stroke-width:1.6;stroke-dasharray:4 3;fill:none;}
+    .pill{fill:var(--surface);stroke:var(--line);stroke-width:1;}
+    .pillok{fill:var(--oksoft);stroke:var(--ok);stroke-width:1;}
+  </style>
+
+  <text class="m" x="120" y="40" text-anchor="middle" font-size="13">round 0 · boot</text>
+  <text class="m" x="360" y="40" text-anchor="middle" font-size="13">round 1</text>
+  <text class="m" x="600" y="40" text-anchor="middle" font-size="13">round 2 · converged</text>
+
+  <path class="eok" d="M120 95 L177 136"/><path class="eok" d="M177 136 L155 204"/><path class="eok" d="M155 204 L85 204"/><path class="eok" d="M120 95 L155 204"/>
+  <path class="egos" d="M120 95 L63 136"/>
+
+  <path class="eok" d="M360 95 L417 136"/><path class="eok" d="M417 136 L395 204"/><path class="eok" d="M395 204 L325 204"/><path class="eok" d="M360 95 L395 204"/>
+  <path class="egos" d="M360 95 L303 136"/><path class="egos" d="M417 136 L303 136"/><path class="egos" d="M325 204 L303 136"/>
+
+  <path class="eok" d="M600 95 L657 136"/><path class="eok" d="M657 136 L635 204"/><path class="eok" d="M635 204 L565 204"/><path class="eok" d="M600 95 L635 204"/><path class="eok" d="M600 95 L543 136"/><path class="eok" d="M565 204 L543 136"/>
+
+  <circle class="ring" cx="120" cy="95" r="13"/><circle class="ring" cx="360" cy="95" r="13"/><circle class="ring" cx="600" cy="95" r="13"/>
+
+  <circle class="nok" cx="120" cy="95" r="9"/><circle class="nok" cx="177" cy="136" r="9"/><circle class="nok" cx="155" cy="204" r="9"/><circle class="nok" cx="85" cy="204" r="9"/><circle class="nnew" cx="63" cy="136" r="9"/>
+  <circle class="nok" cx="360" cy="95" r="9"/><circle class="nok" cx="417" cy="136" r="9"/><circle class="nok" cx="395" cy="204" r="9"/><circle class="nok" cx="325" cy="204" r="9"/><circle class="nnew" cx="303" cy="136" r="9"/>
+  <circle class="nok" cx="600" cy="95" r="9"/><circle class="nok" cx="657" cy="136" r="9"/><circle class="nok" cx="635" cy="204" r="9"/><circle class="nok" cx="565" cy="204" r="9"/><circle class="nok" cx="543" cy="136" r="9"/>
+
+  <text class="m" x="120" y="76" text-anchor="middle" font-size="11">seed</text>
+  <text class="m" x="46" y="140" text-anchor="end" font-size="11">new</text>
+
+  <rect class="pill" x="48" y="238" width="144" height="24" rx="12"/>
+  <text x="120" y="254" text-anchor="middle" font-size="12">joiner knows 2 / 5</text>
+  <rect class="pill" x="282" y="238" width="156" height="24" rx="12"/>
+  <text x="360" y="254" text-anchor="middle" font-size="12">knows 5 / 5 · syncing</text>
+  <rect class="pillok" x="528" y="238" width="144" height="24" rx="12"/>
+  <text x="600" y="254" text-anchor="middle" font-size="12">all rosters match</text>
+
+  <circle class="ring" cx="46" cy="284" r="6"/><circle class="nok" cx="46" cy="284" r="4"/><text class="m" x="58" y="288" font-size="11">seed</text>
+  <circle class="nnew" cx="130" cy="284" r="5"/><text class="m" x="140" y="288" font-size="11">new joiner</text>
+  <circle class="nok" cx="248" cy="284" r="5"/><text class="m" x="258" y="288" font-size="11">cluster node</text>
+  <line class="eok" x1="366" y1="284" x2="392" y2="284"/><text class="m" x="400" y="288" font-size="11">established awareness</text>
+  <line class="egos" x1="566" y1="284" x2="592" y2="284"/><text class="m" x="600" y="288" font-size="11">gossip (UDP)</text>
+</svg>

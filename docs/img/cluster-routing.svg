@@ -1,0 +1,53 @@
+<svg width="720" height="360" viewBox="0 0 720 360" role="img" xmlns="http://www.w3.org/2000/svg">
+  <title>Routing by redirect, not proxy</title>
+  <desc>A client sends GET to a non-owner, which replies with a MOVED redirect naming the owner; the client reconnects to the owner and receives the value. kyria never forwards on the client's behalf.</desc>
+  <style>
+    :root{--ink:#24292f;--muted:#57606a;--line:#d0d7de;--surface:#f6f8fa;--accent:#0969da;--soft:#ddf4ff;--ok:#1a7f37;--danger:#cf222e;}
+    @media (prefers-color-scheme:dark){:root{--ink:#e6edf3;--muted:#8b949e;--line:#30363d;--surface:#161b22;--accent:#58a6ff;--soft:#12283f;--ok:#3fb950;--danger:#f85149;}}
+    text{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;fill:var(--ink);}
+    .m{fill:var(--muted);}
+    .mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;}
+    .box{fill:var(--surface);stroke:var(--line);stroke-width:1.5;}
+    .prim{fill:var(--surface);stroke:var(--accent);stroke-width:2;}
+    .badge{fill:var(--accent);}
+  </style>
+  <defs>
+    <marker id="dk" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="var(--ink)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="rd" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="var(--danger)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="bl" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  </defs>
+
+  <rect class="box" x="40" y="146" width="150" height="64" rx="8" stroke-dasharray="5 4"/>
+  <text class="mono" x="60" y="176" font-size="15">client</text>
+  <text class="m" x="60" y="196" font-size="12">connects to any node</text>
+
+  <rect class="box" x="486" y="70" width="192" height="52" rx="8"/>
+  <circle cx="504" cy="90" r="5" fill="var(--ok)"/>
+  <text class="mono" x="518" y="94" font-size="14">kyria-3:6379</text>
+  <text class="m" x="504" y="112" font-size="12">not primary for "foo"</text>
+
+  <rect class="prim" x="486" y="242" width="192" height="56" rx="8"/>
+  <rect class="badge" x="600" y="232" width="78" height="20" rx="6"/>
+  <text class="mono" x="639" y="246" text-anchor="middle" font-size="11" fill="#fff">PRIMARY</text>
+  <circle cx="504" cy="266" r="5" fill="var(--accent)"/>
+  <text class="mono" x="518" y="270" font-size="14">kyria-2:6379</text>
+  <text class="m" x="504" y="288" font-size="12">owner of "foo"</text>
+
+  <path d="M195 168 C 320 120, 400 100, 480 96" fill="none" stroke="var(--ink)" stroke-width="1.8" marker-end="url(#dk)"/>
+  <circle class="badge" cx="300" cy="122" r="11"/><text x="300" y="126" text-anchor="middle" font-size="12" fill="#fff">1</text>
+  <text class="mono" x="318" y="126" font-size="12">GET foo</text>
+
+  <path d="M480 116 C 380 150, 300 168, 197 182" fill="none" stroke="var(--danger)" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#rd)"/>
+  <circle cx="360" cy="158" r="11" fill="var(--danger)"/><text x="360" y="162" text-anchor="middle" font-size="12" fill="#fff">2</text>
+  <text class="mono" x="378" y="162" font-size="12" fill="var(--danger)">-MOVED kyria-2:6379</text>
+
+  <path d="M195 196 C 320 232, 400 256, 480 264" fill="none" stroke="var(--accent)" stroke-width="1.8" marker-end="url(#bl)"/>
+  <circle class="badge" cx="300" cy="240" r="11"/><text x="300" y="244" text-anchor="middle" font-size="12" fill="#fff">3</text>
+  <text class="mono" x="318" y="244" font-size="12" fill="var(--accent)">reconnect · GET foo</text>
+
+  <path d="M480 288 C 360 318, 300 312, 197 210" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-dasharray="2 4" marker-end="url(#bl)"/>
+  <circle class="badge" cx="332" cy="318" r="11"/><text x="332" y="322" text-anchor="middle" font-size="12" fill="#fff">4</text>
+  <text class="mono" x="350" y="322" font-size="12" fill="var(--accent)">$3 bar  (the value)</text>
+
+  <text class="m" x="24" y="350" font-size="12">a non-owner redirects, it never forwards — so a node's ID must be a client-reachable address</text>
+</svg>

@@ -1,0 +1,68 @@
+<svg width="720" height="320" viewBox="0 0 720 320" role="img" xmlns="http://www.w3.org/2000/svg">
+  <title>The gossip merge rule</title>
+  <desc>Four cases showing how a node folds an incoming member record into its own: unknown inserts, a higher incarnation is adopted wholesale, an equal incarnation takes the deader state, and a claim about self is refuted by raising the node's own incarnation.</desc>
+  <style>
+    :root{--ink:#24292f;--muted:#57606a;--line:#d0d7de;--surface:#f6f8fa;--accent:#0969da;--soft:#ddf4ff;--ok:#1a7f37;--oksoft:#dafbe1;--danger:#cf222e;--dsoft:#ffebe9;}
+    @media (prefers-color-scheme:dark){:root{--ink:#e6edf3;--muted:#8b949e;--line:#30363d;--surface:#161b22;--accent:#58a6ff;--soft:#12283f;--ok:#3fb950;--oksoft:#12261a;--danger:#f85149;--dsoft:#3c1618;}}
+    text{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;fill:var(--ink);}
+    .m{fill:var(--muted);}
+    .mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;}
+    .hd{fill:var(--muted);font-size:11px;letter-spacing:0.06em;}
+    .pn{fill:none;stroke:var(--line);stroke-width:1.3;stroke-dasharray:4 3;}
+    .pg{fill:var(--oksoft);stroke:var(--ok);stroke-width:1.3;}
+    .pr{fill:var(--dsoft);stroke:var(--danger);stroke-width:1.3;}
+    .pb{fill:var(--soft);stroke:var(--accent);stroke-width:1.6;}
+    .sep{stroke:var(--line);stroke-width:1;}
+  </style>
+
+  <text class="hd" x="24" y="40">LOCAL VIEW</text>
+  <text class="hd" x="176" y="40">RECEIVED</text>
+  <text class="hd" x="348" y="40">→ MERGED</text>
+  <text class="hd" x="500" y="40">RULE APPLIED</text>
+
+  <line class="sep" x1="24" y1="116" x2="696" y2="116"/>
+  <line class="sep" x1="24" y1="180" x2="696" y2="180"/>
+  <line class="sep" x1="24" y1="244" x2="696" y2="244"/>
+
+  <rect class="pn" x="24" y="60" width="128" height="44" rx="7"/>
+  <text class="m" x="42" y="87" font-size="13">— (unknown)</text>
+  <rect class="pg" x="176" y="60" width="140" height="44" rx="7"/>
+  <circle cx="192" cy="76" r="5" fill="var(--ok)"/><text class="mono" x="204" y="80" font-size="12">kyria-5</text><text class="m mono" x="190" y="97" font-size="11">alive · inc 1</text>
+  <text class="m" x="330" y="87" font-size="15">→</text>
+  <rect class="pg" x="348" y="60" width="140" height="44" rx="7"/>
+  <circle cx="364" cy="76" r="5" fill="var(--ok)"/><text class="mono" x="376" y="80" font-size="12">kyria-5</text><text class="m mono" x="362" y="97" font-size="11">alive · inc 1</text>
+  <text x="500" y="80" font-size="13" font-weight="500">Unknown node → insert</text>
+  <text class="m" x="500" y="98" font-size="12">added to the roster verbatim</text>
+
+  <rect class="pg" x="24" y="124" width="128" height="44" rx="7"/>
+  <circle cx="40" cy="140" r="5" fill="var(--ok)"/><text class="mono" x="52" y="144" font-size="12">kyria-3</text><text class="m mono" x="38" y="161" font-size="11">alive · inc 4</text>
+  <rect class="pr" x="176" y="124" width="140" height="44" rx="7"/>
+  <circle cx="192" cy="140" r="5" fill="var(--danger)"/><text class="mono" x="204" y="144" font-size="12">kyria-3</text><text class="m mono" x="190" y="161" font-size="11">dead · inc 6</text>
+  <text class="m" x="330" y="151" font-size="15">→</text>
+  <rect class="pr" x="348" y="124" width="140" height="44" rx="7"/>
+  <circle cx="364" cy="140" r="5" fill="var(--danger)"/><text class="mono" x="376" y="144" font-size="12">kyria-3</text><text class="m mono" x="362" y="161" font-size="11">dead · inc 6</text>
+  <text x="500" y="144" font-size="13" font-weight="500">Higher incarnation wins</text>
+  <text class="m" x="500" y="162" font-size="12">inc 6 &gt; 4 → adopt the whole record</text>
+
+  <rect class="pg" x="24" y="188" width="128" height="44" rx="7"/>
+  <circle cx="40" cy="204" r="5" fill="var(--ok)"/><text class="mono" x="52" y="208" font-size="12">kyria-4</text><text class="m mono" x="38" y="225" font-size="11">alive · inc 9</text>
+  <rect class="pr" x="176" y="188" width="140" height="44" rx="7"/>
+  <circle cx="192" cy="204" r="5" fill="var(--danger)"/><text class="mono" x="204" y="208" font-size="12">kyria-4</text><text class="m mono" x="190" y="225" font-size="11">dead · inc 9</text>
+  <text class="m" x="330" y="215" font-size="15">→</text>
+  <rect class="pr" x="348" y="188" width="140" height="44" rx="7"/>
+  <circle cx="364" cy="204" r="5" fill="var(--danger)"/><text class="mono" x="376" y="208" font-size="12">kyria-4</text><text class="m mono" x="362" y="225" font-size="11">dead · inc 9</text>
+  <text x="500" y="208" font-size="13" font-weight="500">Equal incarnation → deader wins</text>
+  <text class="m" x="500" y="226" font-size="12">same counter: dead beats alive</text>
+
+  <rect class="pb" x="24" y="252" width="128" height="44" rx="7"/>
+  <circle cx="40" cy="268" r="5" fill="var(--accent)"/><text class="mono" x="52" y="272" font-size="12">kyria-1</text>
+  <rect x="112" y="258" width="32" height="15" rx="4" fill="var(--accent)"/><text x="128" y="269" text-anchor="middle" font-size="9" fill="#fff">SELF</text>
+  <text class="m mono" x="38" y="289" font-size="11">alive · inc 5</text>
+  <rect class="pr" x="176" y="252" width="140" height="44" rx="7"/>
+  <circle cx="192" cy="268" r="5" fill="var(--danger)"/><text class="mono" x="204" y="272" font-size="12">kyria-1</text><text class="m mono" x="190" y="289" font-size="11">dead · inc 5</text>
+  <text class="m" x="330" y="279" font-size="15">→</text>
+  <rect class="pb" x="348" y="252" width="140" height="44" rx="7"/>
+  <circle cx="364" cy="268" r="5" fill="var(--accent)"/><text class="mono" x="376" y="272" font-size="12">kyria-1</text><text class="m mono" x="362" y="289" font-size="11">alive · inc 6</text>
+  <text x="500" y="272" font-size="13" font-weight="500">Claim about self → refute</text>
+  <text class="m" x="500" y="290" font-size="12">raise our inc above theirs, stay alive</text>
+</svg>

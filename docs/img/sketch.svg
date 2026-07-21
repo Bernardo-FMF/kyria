@@ -1,0 +1,72 @@
+<svg width="720" height="388" viewBox="0 0 720 388" role="img" xmlns="http://www.w3.org/2000/svg">
+  <title>Count-min sketch frequency estimate</title>
+  <desc>The key foo hashes to one column per row; each cell is incremented on add, and the frequency estimate is the minimum across the four rows.</desc>
+  <style>
+    :root{--ink:#24292f;--muted:#57606a;--line:#d0d7de;--surface:#f6f8fa;--accent:#0969da;--soft:#ddf4ff;}
+    @media (prefers-color-scheme:dark){:root{--ink:#e6edf3;--muted:#8b949e;--line:#30363d;--surface:#161b22;--accent:#58a6ff;--soft:#12283f;}}
+    text{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;fill:var(--ink);}
+    .m{fill:var(--muted);}
+    .box{fill:var(--surface);stroke:var(--line);stroke-width:1.5;}
+    .cell{fill:var(--surface);stroke:var(--line);stroke-width:1.2;}
+    .hl{fill:var(--soft);stroke:var(--accent);stroke-width:2;}
+    .cn{font-size:13px;fill:var(--muted);}
+    .ch{font-size:14px;fill:var(--accent);font-weight:500;}
+  </style>
+
+  <rect class="box" x="24" y="26" width="126" height="44" rx="8"/>
+  <text x="87" y="53" text-anchor="middle" font-size="15">add("foo")</text>
+  <text x="176" y="42" font-size="13" class="m">h = maphash(seed, "foo")</text>
+  <text x="176" y="62" font-size="13" class="m">h1, h2 = its two 32-bit halves</text>
+
+  <text x="118" y="144" text-anchor="end" font-size="13" class="m">row 0</text>
+  <text x="118" y="190" text-anchor="end" font-size="13" class="m">row 1</text>
+  <text x="118" y="236" text-anchor="end" font-size="13" class="m">row 2</text>
+  <text x="118" y="282" text-anchor="end" font-size="13" class="m">row 3</text>
+
+  <rect class="cell" x="130" y="120" width="38" height="38" rx="6"/><text class="cn" x="149" y="144" text-anchor="middle">1</text>
+  <rect class="cell" x="174" y="120" width="38" height="38" rx="6"/><text class="cn" x="193" y="144" text-anchor="middle">0</text>
+  <rect class="hl"   x="218" y="120" width="38" height="38" rx="6"/><text class="ch" x="237" y="144" text-anchor="middle">4</text>
+  <rect class="cell" x="262" y="120" width="38" height="38" rx="6"/><text class="cn" x="281" y="144" text-anchor="middle">2</text>
+  <rect class="cell" x="306" y="120" width="38" height="38" rx="6"/><text class="cn" x="325" y="144" text-anchor="middle">0</text>
+  <rect class="cell" x="350" y="120" width="38" height="38" rx="6"/><text class="cn" x="369" y="144" text-anchor="middle">1</text>
+  <rect class="cell" x="394" y="120" width="38" height="38" rx="6"/><text class="cn" x="413" y="144" text-anchor="middle">3</text>
+  <rect class="cell" x="438" y="120" width="38" height="38" rx="6"/><text class="cn" x="457" y="144" text-anchor="middle">0</text>
+
+  <rect class="cell" x="130" y="166" width="38" height="38" rx="6"/><text class="cn" x="149" y="190" text-anchor="middle">0</text>
+  <rect class="cell" x="174" y="166" width="38" height="38" rx="6"/><text class="cn" x="193" y="190" text-anchor="middle">2</text>
+  <rect class="cell" x="218" y="166" width="38" height="38" rx="6"/><text class="cn" x="237" y="190" text-anchor="middle">1</text>
+  <rect class="cell" x="262" y="166" width="38" height="38" rx="6"/><text class="cn" x="281" y="190" text-anchor="middle">0</text>
+  <rect class="cell" x="306" y="166" width="38" height="38" rx="6"/><text class="cn" x="325" y="190" text-anchor="middle">1</text>
+  <rect class="hl"   x="350" y="166" width="38" height="38" rx="6"/><text class="ch" x="369" y="190" text-anchor="middle">4</text>
+  <rect class="cell" x="394" y="166" width="38" height="38" rx="6"/><text class="cn" x="413" y="190" text-anchor="middle">1</text>
+  <rect class="cell" x="438" y="166" width="38" height="38" rx="6"/><text class="cn" x="457" y="190" text-anchor="middle">2</text>
+
+  <rect class="cell" x="130" y="212" width="38" height="38" rx="6"/><text class="cn" x="149" y="236" text-anchor="middle">2</text>
+  <rect class="cell" x="174" y="212" width="38" height="38" rx="6"/><text class="cn" x="193" y="236" text-anchor="middle">0</text>
+  <rect class="cell" x="218" y="212" width="38" height="38" rx="6"/><text class="cn" x="237" y="236" text-anchor="middle">1</text>
+  <rect class="cell" x="262" y="212" width="38" height="38" rx="6"/><text class="cn" x="281" y="236" text-anchor="middle">1</text>
+  <rect class="cell" x="306" y="212" width="38" height="38" rx="6"/><text class="cn" x="325" y="236" text-anchor="middle">0</text>
+  <rect class="cell" x="350" y="212" width="38" height="38" rx="6"/><text class="cn" x="369" y="236" text-anchor="middle">2</text>
+  <rect class="cell" x="394" y="212" width="38" height="38" rx="6"/><text class="cn" x="413" y="236" text-anchor="middle">0</text>
+  <rect class="hl"   x="438" y="212" width="38" height="38" rx="6"/><text class="ch" x="457" y="236" text-anchor="middle">3</text>
+
+  <rect class="cell" x="130" y="258" width="38" height="38" rx="6"/><text class="cn" x="149" y="282" text-anchor="middle">1</text>
+  <rect class="cell" x="174" y="258" width="38" height="38" rx="6"/><text class="cn" x="193" y="282" text-anchor="middle">3</text>
+  <rect class="cell" x="218" y="258" width="38" height="38" rx="6"/><text class="cn" x="237" y="282" text-anchor="middle">0</text>
+  <rect class="hl"   x="262" y="258" width="38" height="38" rx="6"/><text class="ch" x="281" y="282" text-anchor="middle">5</text>
+  <rect class="cell" x="306" y="258" width="38" height="38" rx="6"/><text class="cn" x="325" y="282" text-anchor="middle">2</text>
+  <rect class="cell" x="350" y="258" width="38" height="38" rx="6"/><text class="cn" x="369" y="282" text-anchor="middle">0</text>
+  <rect class="cell" x="394" y="258" width="38" height="38" rx="6"/><text class="cn" x="413" y="282" text-anchor="middle">1</text>
+  <rect class="cell" x="438" y="258" width="38" height="38" rx="6"/><text class="cn" x="457" y="282" text-anchor="middle">0</text>
+
+  <text x="510" y="190" font-size="13" class="m">column =</text>
+  <text x="510" y="210" font-size="13" class="m">(h1 + row·h2)</text>
+  <text x="510" y="230" font-size="13" class="m">mod width</text>
+
+  <text x="24" y="336" font-size="14">estimate("foo") = min(</text>
+  <text x="212" y="336" font-size="14" class="ch">4, 4, 3, 5</text>
+  <text x="300" y="336" font-size="14">) = </text>
+  <text x="336" y="336" font-size="15" font-weight="500" fill="var(--accent)">3</text>
+
+  <text x="24" y="368" font-size="13" class="m">a hash clash can only inflate a counter, never lower it — so the row-minimum cancels collisions</text>
+</svg>

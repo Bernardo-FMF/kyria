@@ -1,8 +1,3 @@
-// Package cluster turns a set of kyria nodes into a cluster. This file is the
-// membership state: each node's local view of who is in the cluster and whether
-// they're alive, kept eventually-consistent by gossip. It is pure — no sockets,
-// no goroutines — so the merge and failure-detection logic is unit-tested
-// directly. The gossip loop and UDP transport that drive it live elsewhere (6b).
 package cluster
 
 import (
@@ -13,8 +8,7 @@ import (
 
 // NodeState is a member's liveness as carried in the gossiped view. The values
 // are ordered by "deadness" so a merge can break incarnation ties by taking the
-// higher (deader) state. Suspect is reserved for the later SWIM phase and is not
-// produced by the simplified gossip detector yet.
+// higher (deader) state.
 type NodeState uint8
 
 const (
@@ -23,11 +17,10 @@ const (
 	Dead
 )
 
-// Node is one member's gossiped state — the unit peers exchange. A higher
-// Incarnation is fresher information about that node; a node is the only one that
-// raises its own Incarnation (each gossip round, and to refute a false
-// Suspect/Dead claim about itself). Keeping this version field now is what makes
-// the later SWIM upgrade a small change rather than a refactor.
+// Node is one member's gossiped state.
+// A higher incarnation is fresher information about that node; a node is the only
+// one that raises its own incarnation (each gossip round, and to refute a false
+// Suspect/Dead claim about itself).
 type Node struct {
 	ID          string
 	Addr        string // UDP gossip address, "host:port"
@@ -43,8 +36,7 @@ type entry struct {
 }
 
 // Members is this node's view of the cluster: a concurrency-safe roster keyed by
-// node ID (the gossip loop and the receive path touch it from different
-// goroutines) plus the ID of self.
+// node ID plus the ID of self.
 type Members struct {
 	mu     sync.Mutex
 	self   string
@@ -53,8 +45,7 @@ type Members struct {
 }
 
 // NewMembers returns a roster seeded with self as its only member, forced to
-// state Alive. Every method that touches the roster holds m.mu. A nil logger
-// falls back to slog.Default().
+// state Alive. Every method that touches the roster holds the lock.
 func NewMembers(self Node, logger *slog.Logger) *Members {
 	nodes := make(map[string]*entry)
 
@@ -76,8 +67,8 @@ func NewMembers(self Node, logger *slog.Logger) *Members {
 }
 
 // Bump is the self-heartbeat: it raises self's incarnation and refreshes lastSeen.
-// The gossip loop calls it each round so peers keep seeing self advance — a self
-// whose incarnation stops climbing is how others come to detect it as failed.
+// The gossip loop calls it each round so peers keep seeing self advance, otherwise
+// the remaining nodes would detect self as failed.
 func (m *Members) Bump(now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -88,12 +79,14 @@ func (m *Members) Bump(now time.Time) {
 	self.node.Incarnation++
 }
 
-// Merge folds a peer's gossiped view into the local one (anti-entropy). It is the
-// convergence rule of the whole protocol — commutative and idempotent, so peers
-// exchanging views in any order settle on the same state. Per remote node: a
-// strictly higher incarnation is adopted wholesale; on an incarnation tie the
-// deader state wins; a claim that self is not alive is refuted by out-incarnating
-// it; and other news about self is ignored.
+// Merge folds a peer's gossiped view into the local one (anti-entropy). The operation
+// is commutative and idempotent, so peers exchanging views in any order settle on
+// the same state.
+// Per remote node:
+//  1. a strictly higher incarnation is adopted;
+//  2. on an incarnation tie the deader state wins;
+//  3. a claim that self is not alive is refuted by out-incarnating it;
+//     and other news about self is ignored.
 func (m *Members) Merge(remote []Node, now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -134,9 +127,7 @@ func (m *Members) Merge(remote []Node, now time.Time) {
 }
 
 // DetectFailures marks every alive non-self node whose last update is older than
-// timeout as Dead; a revived node later refutes with a higher incarnation. Taking
-// now as a parameter keeps it a pure, sleep-free predicate, like the store's
-// expired(now).
+// timeout as Dead; a revived node later refutes with a higher incarnation.
 func (m *Members) DetectFailures(now time.Time, timeout time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -153,7 +144,7 @@ func (m *Members) DetectFailures(now time.Time, timeout time.Duration) {
 	}
 }
 
-// logStateChange reports a member's liveness transition. Called with m.mu held.
+// logStateChange reports a member's liveness transition. Called with the lock held.
 func (m *Members) logStateChange(id string, was, now NodeState) {
 	if was == now {
 		return
@@ -167,7 +158,7 @@ func (m *Members) logStateChange(id string, was, now NodeState) {
 	m.logger.Warn("node state changed", "node", id, "was", was, "now", now)
 }
 
-// Snapshot returns a copy of every member's Node — the payload the gossip loop
+// Snapshot returns a copy of every member's Node: the payload the gossip loop
 // ships to peers.
 func (m *Members) Snapshot() []Node {
 	m.mu.Lock()
@@ -181,8 +172,7 @@ func (m *Members) Snapshot() []Node {
 	return nodes
 }
 
-// Alive returns a copy of the members currently in state Alive — the set the ring
-// will place keys across. Order is unspecified.
+// Alive returns a copy of the members currently in state Alive.
 func (m *Members) Alive() []Node {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -197,6 +187,7 @@ func (m *Members) Alive() []Node {
 	return nodes
 }
 
+// Self returns the self node.
 func (m *Members) Self() Node {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -5,6 +5,13 @@ import (
 	"testing"
 )
 
+// sortedAdd adds node then re-sorts — the per-add convenience the tests want. Production
+// adds every node first and sorts once (see Router.rebuild), so this lives here, not on Ring.
+func sortedAdd(r *Ring, node string) {
+	r.Add(node)
+	r.Sort()
+}
+
 // TestRing_Empty: with no nodes, Get reports no owner.
 func TestRing_Empty(t *testing.T) {
 	r := NewRing(10)
@@ -21,7 +28,7 @@ func TestRing_Deterministic(t *testing.T) {
 	build := func() *Ring {
 		r := NewRing(50)
 		for _, n := range []string{"a", "b", "c"} {
-			r.SortedAdd(n)
+			sortedAdd(r, n)
 		}
 		return r
 	}
@@ -43,7 +50,7 @@ func TestRing_DistributesAcrossNodes(t *testing.T) {
 	nodes := []string{"a", "b", "c", "d"}
 	r := NewRing(100)
 	for _, n := range nodes {
-		r.SortedAdd(n)
+		sortedAdd(r, n)
 	}
 
 	counts := map[string]int{}
@@ -65,7 +72,7 @@ func TestRing_MinimalRemapping(t *testing.T) {
 	nodes := []string{"a", "b", "c", "d"}
 	r := NewRing(100)
 	for _, n := range nodes {
-		r.SortedAdd(n)
+		sortedAdd(r, n)
 	}
 
 	before := map[string]string{}
@@ -99,7 +106,7 @@ func TestRing_GetN_DistinctReplicas(t *testing.T) {
 	nodes := []string{"a", "b", "c", "d", "e"}
 	r := NewRing(100)
 	for _, n := range nodes {
-		r.SortedAdd(n)
+		sortedAdd(r, n)
 	}
 
 	for i := range 500 {
@@ -126,8 +133,8 @@ func TestRing_GetN_DistinctReplicas(t *testing.T) {
 // returns every node exactly once — no duplicates, no padding.
 func TestRing_GetN_FewerNodesThanN(t *testing.T) {
 	r := NewRing(100)
-	r.SortedAdd("a")
-	r.SortedAdd("b")
+	sortedAdd(r, "a")
+	sortedAdd(r, "b")
 
 	got := r.GetN("key-1", 5)
 	if len(got) != 2 {

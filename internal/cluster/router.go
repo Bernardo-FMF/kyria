@@ -10,24 +10,24 @@ import (
 
 // Router maps keys to the node that owns them by keeping a consistent-hash Ring in
 // sync with the gossiped membership. It bridges the two halves of the cluster:
-// Members says who is alive, the Ring says who owns what. A background goroutine
-// rebuilds the ring from Members.Alive() every interval and swaps it in atomically,
-// so the request-path reads (Owner/IsLocal) are lock-free and never see a
-// half-built ring.
+// Members keeps track of alive nodes, the Ring keeps track of which node owns what key.
+// A background goroutine rebuilds the ring from Members.Alive() every interval and
+// swaps it in atomically, so the request-path reads (Owner/IsLocal) are lock-free
+// and never see a half-built ring.
 type Router struct {
 	self     string        // this node's ID (from Members.Self)
 	members  *Members      // the live membership view
 	replicas int           // virtual nodes per physical node
 	interval time.Duration // how often to rebuild the ring from Alive()
 
-	// ring holds the current consistent-hash ring. rebuild() swaps in a brand-new
-	// ring with a single atomic Store, so request-path reads (Owner) are lock-free
-	// and never see a half-built ring — an immutable value published by pointer swap.
+	// ring holds the current consistent-hash ring. rebuild swaps in a brand-new
+	// ring with a single atomic Store. Swapping is lock-free because an immutable
+	// value is published by pointer swap.
 	ring atomic.Pointer[Ring]
 
 	logger *slog.Logger
-	// lastNodes is the sorted membership the current ring was built from. Only rebuild touches it,
-	// and rebuild runs on one goroutine (the constructor's call precedes Start), so it needs no lock.
+	// lastNodes is the sorted membership the current ring was built from, used to
+	// identify changes in the membership list.
 	lastNodes []string
 
 	stopOnce sync.Once
@@ -37,8 +37,7 @@ type Router struct {
 
 // NewRouter returns a Router for members, with replicas virtual nodes per node and
 // a rebuild every interval. It builds the initial ring immediately, so Owner works
-// before (and without) Start — handy for a single-node setup. A nil logger falls
-// back to slog.Default().
+// before (and without) Start, so single node setups can keep working.
 func NewRouter(members *Members, replicas int, interval time.Duration, logger *slog.Logger) *Router {
 	if logger == nil {
 		logger = slog.Default()
@@ -58,7 +57,7 @@ func NewRouter(members *Members, replicas int, interval time.Duration, logger *s
 
 // rebuild constructs a fresh ring from the current alive membership and publishes it
 // with a single atomic Store. Building a brand-new ring (rather than mutating the
-// live one) is what lets readers stay lock-free — see the note at the bottom.
+// live one) is what lets readers stay lock-free.
 func (r *Router) rebuild() {
 	alive := r.members.Alive()
 	nodes := make([]string, 0, len(alive))
@@ -80,7 +79,7 @@ func (r *Router) rebuild() {
 }
 
 // Start launches the background loop that rebuilds the ring every interval, until
-// Stop. Same lifecycle shape as the janitor and gossiper.
+// Stop is called.
 func (r *Router) Start() {
 	r.wg.Go(func() {
 		ticker := time.NewTicker(r.interval)
@@ -97,15 +96,13 @@ func (r *Router) Start() {
 	})
 }
 
-// Stop ends the background rebuild loop and waits for it to exit. Safe to call more
-// than once.
+// Stop ends the background rebuild loop and waits for it to exit.
 func (r *Router) Stop() {
 	r.stopOnce.Do(func() { close(r.stop) })
 	r.wg.Wait()
 }
 
 // Owner returns the ID of the node that owns key, and false if the cluster is empty.
-// The ring read is lock-free — an atomic Load of the current ring.
 func (r *Router) Owner(key string) (string, bool) {
 	return r.ring.Load().Get(key)
 }
@@ -116,9 +113,8 @@ func (r *Router) IsLocal(key string) bool {
 	return ok && owner == r.self
 }
 
-// Owners returns the replica set for key — the n distinct nodes that should hold it,
-// primary first. The lock-free ring Load means the coordinator can read the replica
-// set on the request path without contending with a rebuild.
+// Owners returns the replica set for key: the n distinct nodes that should hold it,
+// primary first.
 func (r *Router) Owners(key string, n int) []string {
 	return r.ring.Load().GetN(key, n)
 }

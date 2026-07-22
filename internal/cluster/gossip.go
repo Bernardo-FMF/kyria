@@ -13,29 +13,37 @@ import (
 	"github.com/Bernardo-FMF/kyria/internal/binenc"
 )
 
+// GossiperOption configures a Gossiper during construction.
+// Each option is a closure that sets one field.
 type GossiperOption func(*Gossiper)
 
+// WithSeeds overrides the list of node seeds.
 func WithSeeds(s []string) GossiperOption {
 	return func(g *Gossiper) { g.seeds = s }
 }
 
+// WithGossipInterval overrides the duration between each gossip round.
 func WithGossipInterval(d time.Duration) GossiperOption {
 	return func(g *Gossiper) { g.gossipInterval = d }
 }
 
+// WithFailTimeout overrides the duration of the timeout until a node is
+// determined to be dead.
 func WithFailTimeout(d time.Duration) GossiperOption {
 	return func(g *Gossiper) { g.failTimeout = d }
 }
 
+// WithFanout overrides the number of nodes that the local node will gossip with.
 func WithFanout(i int) GossiperOption {
 	return func(g *Gossiper) { g.fanout = i }
 }
 
 // Gossiper drives a Members roster over UDP: each round it heartbeats (Bump),
 // reaps stale peers (DetectFailures), and sends its Snapshot to a few random
-// peers; incoming packets are decoded and Merged in. Two goroutines run it — a
-// receive loop and a periodic gossip loop — both ended by Stop (close the conn to
-// unblock the reader, close stop to end the ticker loop), same shape as the janitor.
+// peers; incoming packets are decoded and Merged in.
+// There are two routine running the gossiper:
+// 1. a receive loop - reads gossip packets;
+// 2. periodic gossip loop - fans out the local members to selected nodes.
 type Gossiper struct {
 	members        *Members
 	conn           net.PacketConn
@@ -50,17 +58,16 @@ type Gossiper struct {
 }
 
 // Max size of a udp packet.
-// Serves as the worst case scenario when reading a packet - most packets will be much smaller than this
+// Serves as the worst case scenario when reading a packet,
+// most packets will be much smaller than this.
 const udpPacketSize = 65536
 
 // A gossip message is a compact big-endian encoding of a []Node, sized to fit in a
 // single UDP packet:
 //
-//	[uint16 count]  then, per node:  [uint8 State][uint64 Incarnation]
-//	                                 [uint16 idLen][id][uint16 addrLen][addr]
-//
-// Strings are length-prefixed and the count is bounded, so a message can never
-// overflow a uint16.
+// [uint16 count] - total number of nodes;
+// then, per node: [uint8 State][uint64 Incarnation]
+//	               [uint16 idLen][id][uint16 addrLen][addr]
 
 // marshal encodes nodes into the wire format above. It errors if there are more
 // than a uint16 of nodes, or if an ID/Addr is too long for its length prefix.
@@ -87,7 +94,7 @@ func marshal(nodes []Node) ([]byte, error) {
 
 // unmarshal decodes a gossip message produced by marshal back into a []Node. It
 // walks data with a bounds-checked cursor: because this is untrusted network input,
-// every read is guarded against len(data) and returns errMalformed rather than
+// every read is guarded against len(data) and returns ErrMalformed rather than
 // indexing past the slice, so no packet can make it panic.
 func unmarshal(data []byte) ([]Node, error) {
 	cursor := 0
@@ -129,8 +136,7 @@ func unmarshal(data []byte) ([]Node, error) {
 }
 
 // pickPeers returns up to k addresses chosen at random from addrs. It works on a
-// copy, so the caller's slice is left untouched; fewer than k come back when addrs
-// holds fewer than k.
+// copy, so the caller's slice is left untouched.
 func pickPeers(addrs []string, k int) []string {
 	shuffled := slices.Clone(addrs)
 	rand.Shuffle(len(shuffled), func(i, j int) {
@@ -170,9 +176,8 @@ func (g *Gossiper) Start() {
 	go g.gossipLoop()
 }
 
-// Stop shuts the engine down and is safe to call more than once. Closing stop ends
-// the gossip loop and closing the connection unblocks the receive loop's ReadFrom;
-// Wait then drains both goroutines.
+// Stop shuts the engine down. Closing stop ends the gossip loop and closing the
+// connection unblocks the receive loop's ReadFrom; Wait then drains both goroutines.
 func (g *Gossiper) Stop() {
 	g.stopOnce.Do(func() {
 		close(g.stop)
@@ -218,9 +223,9 @@ func (g *Gossiper) gossipLoop() {
 	}
 }
 
-// round is one gossip cycle: heartbeat, reap stale peers, then send the current
-// membership snapshot to a random fanout of known peers (plus the configured
-// seeds), skipping self. UDP is best-effort, so send errors are ignored — a dropped
+// round is one gossip cycle. It bumps the incarnation of the self node, reaps stale peers,
+// then send the current membership snapshot to a random fanout of known peers (plus the configured
+// seeds), skipping self. UDP is best-effort, so send errors are ignored and a dropped
 // packet is made up for on the next round.
 func (g *Gossiper) round() {
 	now := time.Now()
@@ -228,7 +233,7 @@ func (g *Gossiper) round() {
 	g.members.Bump(now)
 	g.members.DetectFailures(now, g.failTimeout)
 
-	// Gossip targets: every alive peer's address plus the seeds, deduped (a seed we
+	// gossip will target every alive peer's address plus the seeds, deduped (a seed we
 	// already know as an alive peer would otherwise be listed twice).
 	self := g.members.Self()
 	seen := make(map[string]bool)

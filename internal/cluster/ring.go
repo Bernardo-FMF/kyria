@@ -8,20 +8,17 @@ import (
 )
 
 // Ring is a consistent-hash ring: it maps each key to an owning node so that when
-// nodes join or leave, only a small fraction of keys move — unlike `hash % N`,
-// which remaps almost everything. Picture the hash space as a circle; each node is
-// placed at several points on it (virtual nodes), and a key is owned by the first
-// node clockwise from the key's own hash position. Virtual nodes (`replicas` per
-// physical node) even out the load, since without them each node would own one big
-// arc and the split would be lumpy.
+// nodes join or leave, only a small fraction of keys move, unlike `hash % N`
+// (modulo hashing), which remaps almost everything.
+// Each node is placed at several points throughout the ring (virtual nodes),
+// and a key is owned by the first node clockwise from the key's own hash position.
+// Virtual nodes (`replicas` per physical node) even out the load, since without them
+// each node would own one big arc and the split would be uneven.
 //
 // The hash MUST be deterministic across processes (see hashStr) — every node in the
-// cluster has to compute the SAME key→node mapping, or they'd disagree on ownership.
+// cluster has to compute the SAME key to node mapping, or they'd disagree on ownership.
 // (This is the opposite of the store's shardFor, which uses a random per-process
 // maphash seed precisely because that mapping is node-local.)
-//
-// A Ring is not safe for concurrent use; the routing layer (7b) that owns it will
-// serialize rebuilds against reads.
 type Ring struct {
 	replicas int
 	points   []point // sorted ascending by hash
@@ -40,14 +37,7 @@ func NewRing(replicas int) *Ring {
 	}
 }
 
-// SortedAdd places node on the ring at replicas virtual points, then re-sorts the point
-// list. Adding is a cold path — membership changes rarely — so a full re-sort is
-// fine; the hot path is Get.
-func (r *Ring) SortedAdd(node string) {
-	r.Add(node)
-	r.Sort()
-}
-
+// Add places a node on the end of the ring at replicas virtual points.
 func (r *Ring) Add(node string) {
 	for i := range r.replicas {
 		hash := hashStr(node + "#" + strconv.Itoa(i))
@@ -55,6 +45,7 @@ func (r *Ring) Add(node string) {
 	}
 }
 
+// Sort orders the nodes point list by hash.
 func (r *Ring) Sort() {
 	slices.SortFunc(r.points, func(a, b point) int {
 		return cmp.Compare(a.hash, b.hash)
@@ -68,8 +59,8 @@ func (r *Ring) Remove(node string) {
 	})
 }
 
-// Get returns the node that owns key — the first virtual point clockwise from the
-// key's hash, wrapping around the ring — and false if the ring is empty.
+// Get returns the node that owns key: the first virtual point clockwise from the
+// key's hash, wrapping around the ring.
 func (r *Ring) Get(key string) (string, bool) {
 	if len(r.points) == 0 {
 		return "", false
@@ -81,10 +72,9 @@ func (r *Ring) Get(key string) (string, bool) {
 	return r.points[idx].node, true
 }
 
-// GetN returns the replica set for key: the primary (the node Get returns) plus the
+// GetN returns distinct replica set for key: the primary (the node Get returns) plus the
 // next n-1 DISTINCT physical nodes clockwise, in that order. It returns fewer than n
-// only when the cluster has fewer than n nodes. This is the set the coordinator
-// writes to and reads from under quorum.
+// only when the cluster has fewer than n nodes.
 func (r *Ring) GetN(key string, n int) []string {
 	if len(r.points) == 0 || n <= 0 {
 		return nil
@@ -94,9 +84,8 @@ func (r *Ring) GetN(key string, n int) []string {
 	idx := findIndex(r, hash)
 	// Walk clockwise from the key's position, taking each physical node the first
 	// time we meet it. Virtual nodes repeat the same node around the ring, so the
-	// slices.Contains skip is what keeps the replica set to n DISTINCT machines. The
-	// (idx+i)%count wraps the walk around the end of the ring; the loop is capped at
-	// count so a cluster smaller than n stops instead of spinning.
+	// slices.Contains skip dedups the replica set. The (idx+i)%count wraps the
+	// walk around the end of the ring.
 	count := len(r.points)
 	var nodes []string
 	for i := range count {
@@ -113,6 +102,8 @@ func (r *Ring) GetN(key string, n int) []string {
 	return nodes
 }
 
+// findIndex performs a binary search to find the index (clockwise) that the hash belongs
+// to. It's a circular structure, so if the index reaches the last point we wrap to the start.
 func findIndex(r *Ring, hash uint64) int {
 	idx := sort.Search(len(r.points), func(i int) bool {
 		return r.points[i].hash >= hash

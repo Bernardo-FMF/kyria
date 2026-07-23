@@ -1,8 +1,3 @@
-// Package version layers vector-clock versioning on top of the opaque byte store.
-// A key's stored value is an ENCODED set of Versions (siblings); this package owns
-// the sibling type, the reconcile rule that folds a write into a set, and the codec
-// that turns a set into the bytes the store holds. The store stays version-agnostic:
-// it never imports this package or vclock — the replication layer sits in between.
 package version
 
 import (
@@ -13,17 +8,15 @@ import (
 )
 
 // Version is one value of a key together with the vector clock stamping its causal
-// history. A key may hold several concurrent Versions — siblings — when writes race,
+// history. A key may hold several concurrent Versions, called siblings, when writes race,
 // which is how vector clocks avoid silently dropping a conflicting update.
 //
 // Deleted marks a tombstone: a version whose value is "gone". It reconciles by clock like any
 // other (a delete mints a superseding clock, so it beats the value it replaces), and the read
-// path treats a winning tombstone as a miss. That's what lets a delete survive a replica that
-// missed it — the tombstone propagates via read-repair / anti-entropy and re-buries the value
-// that would otherwise resurrect.
+// path treats a winning tombstone as a miss.
 //
 // DeletedAt is the wall-clock unix time (seconds) at which a tombstone was minted, stamped once by
-// the coordinator and propagated verbatim so every replica agrees on the deadline. It is zero and
+// the coordinator and propagated so every replica agrees on the deadline. It is zero and
 // meaningless unless Deleted; the tombstone GC reaps a key once every tombstone in its set is older
 // than the grace period.
 type Version struct {
@@ -35,7 +28,7 @@ type Version struct {
 
 // Reconcile folds incoming into the existing sibling set and returns the new set of
 // current versions: it drops any existing version that incoming supersedes, and adds
-// incoming unless an existing version already supersedes (or equals) it — in which
+// incoming unless an existing version already supersedes (or equals) it - in which
 // case incoming is stale and dropped. Versions concurrent with incoming are kept as
 // siblings. This is what a replica does on every write.
 func Reconcile(existing []Version, incoming Version) []Version {
@@ -60,10 +53,9 @@ func Reconcile(existing []Version, incoming Version) []Version {
 	return result
 }
 
-// Frontier returns the causal frontier of a sibling set — the merge (pointwise max)
-// of every version's clock. A coordinator increments the writer's counter on this to
-// mint a clock that descends all current siblings, so the new write supersedes and
-// collapses them. An empty set has an empty (nil) frontier.
+// Frontier returns the causal frontier of a sibling set - the merge of every version's clock.
+// A coordinator increments the writer's counter on this to mint a clock that descends all
+// current siblings, so the new write supersedes and collapses them.
 func Frontier(versions []Version) vclock.Clock {
 	var merged vclock.Clock
 	for _, v := range versions {
@@ -73,9 +65,8 @@ func Frontier(versions []Version) vclock.Clock {
 	return merged
 }
 
-// Tombstone returns a "gone" version stamped with clock and a nil value. coordinator.delete uses
-// it to write a delete as a version with a superseding clock, so it reconciles like any other write
-// and buries the value it replaces.
+// Tombstone returns a "gone" version stamped with clock and a nil value. The coordinator uses
+// it to write a delete as a version with a superseding clock, and buries the value it replaces.
 func Tombstone(clock vclock.Clock, deletedAt int64) Version {
 	return Version{
 		Clock:     clock,
@@ -85,8 +76,8 @@ func Tombstone(clock vclock.Clock, deletedAt int64) Version {
 }
 
 // Live returns the non-tombstone versions (Deleted == false). The read path calls it on the
-// reconciled set: no live versions ⇒ the key is absent (a miss), even if tombstones remain. A value
-// concurrent with a delete stays Live, so a live write survives a concurrent tombstone.
+// reconciled set: if there are no live versions then the key is absent (a miss), even if tombstones remain.
+// A value concurrent with a delete stays Live, so a live write survives a concurrent tombstone.
 func Live(versions []Version) []Version {
 	l := make([]Version, 0, len(versions))
 
@@ -100,10 +91,7 @@ func Live(versions []Version) []Version {
 }
 
 // Equal reports whether two sibling sets hold the same versions, regardless of order.
-// Read-repair uses it to skip replicas that already have the reconciled result. Sibling
-// sets are tiny (usually a single version), so a nested scan beats a map's allocation;
-// and because a reconciled set has no duplicates, equal length plus a ⊆ b implies the
-// sets are equal.
+// Read-repair uses it to skip replicas that already have the reconciled result.
 func Equal(a, b []Version) bool {
 	if len(a) != len(b) {
 		return false
@@ -111,8 +99,8 @@ func Equal(a, b []Version) bool {
 	for _, va := range a {
 		found := false
 		for _, vb := range b {
-			// A value and a tombstone with the same clock are different versions, so Deleted is
-			// part of identity here.
+			// A value and a tombstone with the same clock are different versions,
+			// so Deleted is part of identity here.
 			if bytes.Equal(va.Value, vb.Value) && va.Clock.Compare(vb.Clock) == vclock.Equal && va.Deleted == vb.Deleted {
 				found = true
 				break
@@ -125,9 +113,7 @@ func Equal(a, b []Version) bool {
 	return true
 }
 
-// Encode serializes a sibling set into the opaque bytes the store holds under a key.
-// Encoding can't fail (node IDs never exceed a uint16, values fit a uint32 length),
-// so there is no error return.
+// Encode serializes a sibling set into the bytes the store holds under a key.
 func Encode(versions []Version) []byte {
 	buf := new(bytes.Buffer)
 	binenc.PutUint32(buf, uint32(len(versions)))
@@ -148,10 +134,7 @@ func Encode(versions []Version) []byte {
 	return buf.Bytes()
 }
 
-// Decode parses bytes produced by Encode back into a sibling set. Empty input decodes
-// to an empty set (a key with no value yet). The bytes come from our own store, but
-// decode defensively — binenc's readers bounds-check every read and return
-// ErrMalformed rather than panicking on a truncated or corrupt blob.
+// Decode parses bytes produced by Encode back into a sibling set.
 func Decode(b []byte) ([]Version, error) {
 	if len(b) == 0 {
 		return nil, nil

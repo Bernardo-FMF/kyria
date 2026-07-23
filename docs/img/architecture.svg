@@ -1,0 +1,97 @@
+<svg width="720" height="620" viewBox="0 0 720 620" role="img" xmlns="http://www.w3.org/2000/svg">
+  <title>kyria system architecture</title>
+  <desc>One kyria node exploded into its components: a request spine of Server, Handler, Coordinator, and Store; cluster machinery of Router, Members, Gossiper, and Peer; and six background goroutines. Two collapsed peer nodes show gossip over UDP and replication over TCP.</desc>
+  <style>
+    :root{--ink:#24292f;--muted:#57606a;--line:#d0d7de;--surface:#f6f8fa;--panel:#eef1f4;--accent:#0969da;--soft:#ddf4ff;--ok:#1a7f37;}
+    @media (prefers-color-scheme:dark){:root{--ink:#e6edf3;--muted:#8b949e;--line:#30363d;--surface:#161b22;--panel:#12161c;--accent:#58a6ff;--soft:#12283f;--ok:#3fb950;}}
+    text{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;fill:var(--ink);}
+    .m{fill:var(--muted);}
+    .mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;}
+    .node{fill:none;stroke:var(--accent);stroke-width:2;}
+    .box{fill:var(--surface);stroke:var(--line);stroke-width:1.4;}
+    .panel{fill:var(--panel);stroke:var(--line);stroke-width:1.2;}
+    .loop{fill:var(--surface);stroke:var(--line);stroke-width:1.2;}
+    .peer{fill:var(--surface);stroke:var(--line);stroke-width:1.4;}
+  </style>
+  <defs>
+    <marker id="dk" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="var(--ink)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="mt" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="bl" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="gn" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="var(--ok)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  </defs>
+
+  <rect class="box" x="24" y="34" width="118" height="44" rx="8" stroke-dasharray="5 4"/>
+  <text class="mono" x="40" y="55" font-size="13">client</text>
+  <text class="m" x="40" y="71" font-size="11">any RESP client</text>
+
+  <rect class="node" x="24" y="100" width="512" height="496" rx="12"/>
+  <text class="mono" x="120" y="128" font-size="13">kyria-1</text>
+  <text class="m" x="180" y="128" font-size="12">- single node</text>
+
+  <rect class="box" x="44" y="150" width="152" height="46" rx="7"/>
+  <text x="58" y="170" font-size="13">Server</text><text class="m mono" x="58" y="186" font-size="11">TCP · RESP2</text>
+  <rect class="box" x="44" y="210" width="152" height="46" rx="7"/>
+  <text x="58" y="230" font-size="13">Handler</text><text class="m mono" x="58" y="246" font-size="11">dispatch · routing</text>
+  <rect class="box" x="44" y="270" width="152" height="46" rx="7"/>
+  <text x="58" y="290" font-size="13">Coordinator</text><text class="m mono" x="58" y="306" font-size="11">N/R/W quorum</text>
+  <rect class="box" x="44" y="330" width="152" height="46" rx="7"/>
+  <text x="58" y="350" font-size="13">Store</text><text class="m mono" x="58" y="366" font-size="11">sharded · TTL</text>
+
+  <line x1="120" y1="196" x2="120" y2="210" stroke="var(--ink)" stroke-width="1.6" marker-end="url(#dk)"/>
+  <line x1="120" y1="256" x2="120" y2="270" stroke="var(--ink)" stroke-width="1.6" marker-end="url(#dk)"/>
+  <line x1="120" y1="316" x2="120" y2="330" stroke="var(--ink)" stroke-width="1.6" marker-end="url(#dk)"/>
+
+  <rect class="box" x="216" y="210" width="140" height="40" rx="7"/>
+  <text x="230" y="228" font-size="13">Router</text><text class="m mono" x="230" y="243" font-size="11">hash ring</text>
+  <rect class="box" x="216" y="258" width="140" height="40" rx="7"/>
+  <text x="230" y="276" font-size="13">Members</text><text class="m mono" x="230" y="291" font-size="11">gossip roster</text>
+  <rect class="box" x="216" y="306" width="140" height="40" rx="7"/>
+  <text x="230" y="324" font-size="13">Gossiper</text><text class="m mono" x="230" y="339" font-size="11">UDP engine</text>
+  <rect class="box" x="216" y="354" width="140" height="40" rx="7"/>
+  <text x="230" y="372" font-size="13">Peer</text><text class="m mono" x="230" y="387" font-size="11">replica client</text>
+
+  <line x1="196" y1="230" x2="216" y2="230" stroke="var(--muted)" stroke-width="1.3" marker-end="url(#mt)"/>
+  <line x1="196" y1="290" x2="216" y2="368" stroke="var(--muted)" stroke-width="1.3" marker-end="url(#mt)"/>
+  <text class="m" x="366" y="226" font-size="11">identifies if the key is local</text>
+  <text class="m" x="366" y="240" font-size="11">or in another node.</text>
+  <text class="m" x="366" y="256" font-size="11">remote → reply -MOVED</text>
+
+  <rect class="panel" x="44" y="410" width="480" height="166" rx="9"/>
+  <text class="m" x="60" y="432" font-size="12">background goroutines - run continuously, independent of any request</text>
+
+  <rect class="loop" x="60" y="444" width="140" height="54" rx="6"/>
+  <text class="mono" x="72" y="464" font-size="12">⟳ janitor</text><text class="m" x="72" y="481" font-size="11">expires TTL keys</text>
+  <rect class="loop" x="214" y="444" width="140" height="54" rx="6"/>
+  <text class="mono" x="226" y="464" font-size="12">⟳ ring rebuild</text><text class="m" x="226" y="481" font-size="11">rebuilds the ring</text>
+  <rect class="loop" x="368" y="444" width="140" height="54" rx="6"/>
+  <text class="mono" x="380" y="464" font-size="12">⟳ gossip</text><text class="m" x="380" y="481" font-size="11">spreads membership</text>
+
+  <rect class="loop" x="60" y="508" width="140" height="54" rx="6"/>
+  <text class="mono" x="72" y="528" font-size="12">⟳ hint replay</text><text class="m" x="72" y="545" font-size="11">delivers parked hints</text>
+  <rect class="loop" x="214" y="508" width="140" height="54" rx="6"/>
+  <text class="mono" x="226" y="528" font-size="12">⟳ anti-entropy</text><text class="m" x="226" y="545" font-size="11">reconciles a peer</text>
+  <rect class="loop" x="368" y="508" width="140" height="54" rx="6"/>
+  <text class="mono" x="380" y="528" font-size="12">⟳ tombstone GC</text><text class="m" x="380" y="545" font-size="11">reaps old tombstones</text>
+
+  <rect class="peer" x="560" y="180" width="136" height="86" rx="9"/>
+  <text class="mono" x="576" y="204" font-size="13">kyria-2</text>
+  <text class="m" x="576" y="222" font-size="11">peer node;</text>
+  <text class="m" x="576" y="240" font-size="11">same components,</text>
+  <text class="m" x="576" y="255" font-size="11">holds replica copies</text>
+
+  <rect class="peer" x="560" y="300" width="136" height="86" rx="9"/>
+  <text class="mono" x="576" y="324" font-size="13">kyria-3</text>
+  <text class="m" x="576" y="342" font-size="11">peer node;</text>
+  <text class="m" x="576" y="360" font-size="11">same components,</text>
+  <text class="m" x="576" y="375" font-size="11">holds replica copies</text>
+
+  <path d="M86 78 L112 150" fill="none" stroke="var(--ink)" stroke-width="1.8" marker-end="url(#dk)"/>
+
+  <path d="M356 322 C 460 300, 500 250, 558 232" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#bl)"/>
+  <path d="M356 330 C 460 340, 500 350, 558 348" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#bl)"/>
+  <text class="m" x="406" y="286" font-size="11" fill="var(--accent)">gossip · UDP</text>
+
+  <path d="M356 372 C 470 402, 512 300, 558 256" fill="none" stroke="var(--ok)" stroke-width="1.6" marker-end="url(#gn)"/>
+  <path d="M356 380 C 470 414, 514 392, 558 366" fill="none" stroke="var(--ok)" stroke-width="1.6" marker-end="url(#gn)"/>
+  <text class="m" x="400" y="410" font-size="11" fill="var(--ok)">replication · TCP</text>
+</svg>

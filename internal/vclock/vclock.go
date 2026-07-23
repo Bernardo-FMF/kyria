@@ -1,12 +1,13 @@
-// Package vclock implements vector clocks: per-node logical counters that capture a
-// value's causal history, so two versions of a key can be compared. One version may
-// descend (supersede) the other, or the two may be concurrent — a conflict that the
-// reconciliation layer must keep as siblings rather than silently dropping.
 package vclock
 
 import (
 	"maps"
 )
+
+// A vector clock is a per-node logical counter that captures a value's causal history,
+// so two versions of a key can be compared. One version may descend (supersede) the other,
+// or the two may be concurrent - resulting in a conflict that the reconciliation layer must
+// keep as siblings rather than silently dropping.
 
 // Clock maps a node ID to its logical counter. A node not present reads as counter 0,
 // so the zero value (a nil map) is a valid empty clock.
@@ -22,9 +23,10 @@ const (
 	Concurrent              // neither descends the other — a conflict
 )
 
-// Increment returns a COPY of c with node's counter raised by one, recording a new
-// write coordinated by node. It must not mutate c: a clock is stored alongside its
-// value, and maps are reference types, so mutating in place would corrupt that value.
+// Increment returns a copy of the calling clock with the node's counter raised by one,
+// recording a new write coordinated by node.
+// It must not mutate the calling clock to avoid in-place mutations that would corruct
+// that value.
 func (c Clock) Increment(node string) Clock {
 	clock := make(Clock, len(c)+1)
 	maps.Copy(clock, c)
@@ -32,9 +34,9 @@ func (c Clock) Increment(node string) Clock {
 	return clock
 }
 
-// Merge returns the causal join of c and other: for every node, the higher of the two
-// counters. Reconciliation uses it to fold a set of concurrent siblings into the one
-// clock that descends them all.
+// Merge returns the causal join of the calling clock and other: for every node,
+// the higher of the two counters. Reconciliation uses it to fold a set of concurrent
+// siblings into the one clock that descends them all.
 func (c Clock) Merge(other Clock) Clock {
 	clock := make(Clock, len(c))
 	maps.Copy(clock, c)
@@ -46,11 +48,11 @@ func (c Clock) Merge(other Clock) Clock {
 	return clock
 }
 
-// Compare reports how c relates to other causally.
+// Compare reports how the calling clock relates to other causally.
 func (c Clock) Compare(other Clock) Order {
 	// Walk the union of node IDs (a key missing from one side reads as 0): c is ahead
 	// if it has any higher counter, other is ahead if it does. Ahead on both sides
-	// means the histories diverged — concurrent.
+	// means the histories diverged - concurrent.
 	cAhead := c.aheadOf(other)
 	otherAhead := other.aheadOf(c)
 
